@@ -5,6 +5,8 @@ version = 4
 [[package]]
 name = "loft-ffi"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91b7969b1cfedfd9c7c44a0793ff6b349f5993cb69ea48fe1bc2868224007808"
 
 [[package]]
 name = "loft-server"
