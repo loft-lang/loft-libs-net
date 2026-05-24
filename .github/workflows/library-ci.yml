@@ -62,8 +62,8 @@ jobs:
 
       - name: Interpreter — loft test
         working-directory: ${{ matrix.package }}
-        run: loft test
+        run: loft --interpret --tests .
 
       - name: Native — loft --native test
         working-directory: ${{ matrix.package }}
-        run: loft --native test
+        run: loft --native --tests .
