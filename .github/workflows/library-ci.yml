@@ -36,32 +36,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mold
 
-      - name: Resolve loft HEAD SHA
-        id: loft_sha
-        run: |
-          sha=$(git ls-remote https://github.com/jjstwerff/loft.git HEAD | awk '{print $1}')
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - name: Cache loft binary
-        id: loft_cache
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
-          path: /tmp/loft-bin
-          key: loft-bin-${{ runner.os }}-${{ steps.loft_sha.outputs.sha }}-v2
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-loft-v1
 
-      - name: Build loft from source (cache miss)
-        if: steps.loft_cache.outputs.cache-hit != 'true'
+      - name: Build loft from source
         run: |
           git clone --depth=1 https://github.com/jjstwerff/loft.git /tmp/loft
           (cd /tmp/loft && cargo build --release --bin loft)
-          # Install with the <prefix>/bin/loft + <prefix>/share/loft/default/
-          # layout the binary's project_dir() resolver expects.
-          mkdir -p /tmp/loft-bin/bin /tmp/loft-bin/share/loft
-          cp /tmp/loft/target/release/loft /tmp/loft-bin/bin/loft
-          cp -r /tmp/loft/default /tmp/loft-bin/share/loft/default
 
       - name: Add loft to PATH
-        run: echo "/tmp/loft-bin/bin" >> "$GITHUB_PATH"
+        run: echo "/tmp/loft/target/release" >> "$GITHUB_PATH"
 
       - name: Interpreter — loft test
         working-directory: ${{ matrix.package }}
