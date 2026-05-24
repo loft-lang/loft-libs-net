@@ -1,6 +1,14 @@
-# Placeholder CI for the loft-libs-net chunk.
-# Replaced verbatim once loft-libs-core's canonical
-# `library-ci.yml` template ships (task #61).
+# PKG.REG library CI — canonical workflow shipped 2026-05-24 evening
+# as plan-12 Phase 6.5.  Every package in this chunk runs:
+#   1. loft test            — interpreter end-to-end
+#   2. loft --native test   — native codegen end-to-end
+#
+# Until a public loft binary release exists we build loft from
+# source on the runner.  The .cargo/config.toml in the loft repo
+# forces -fuse-ld=mold, so we apt-get mold first; without it, cc
+# can't find a linker and even the proc-macro2 build script fails.
+#
+# Cached on the loft.git HEAD SHA so repeat runs reuse the binary.
 
 name: library-ci
 
@@ -23,11 +31,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install loft (build from source)
+      - name: Install mold (loft's pinned linker)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
+
+      - name: Resolve loft HEAD SHA
+        id: loft_sha
+        run: |
+          sha=$(git ls-remote https://github.com/jjstwerff/loft.git HEAD | awk '{print $1}')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Cache loft binary
+        id: loft_cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/loft-bin
+          key: loft-bin-${{ runner.os }}-${{ steps.loft_sha.outputs.sha }}-v1
+
+      - name: Build loft from source (cache miss)
+        if: steps.loft_cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://github.com/jjstwerff/loft.git /tmp/loft
-          (cd /tmp/loft && cargo build --release)
-          echo "/tmp/loft/target/release" >> $GITHUB_PATH
+          (cd /tmp/loft && cargo build --release --bin loft)
+          mkdir -p /tmp/loft-bin
+          cp /tmp/loft/target/release/loft /tmp/loft-bin/loft
+
+      - name: Add loft to PATH
+        run: echo "/tmp/loft-bin" >> "$GITHUB_PATH"
 
       - name: Interpreter — loft test
         working-directory: ${{ matrix.package }}
