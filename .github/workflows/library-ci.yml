@@ -1,0 +1,38 @@
+# Placeholder CI for the loft-libs-net chunk.
+# Replaced verbatim once loft-libs-core's canonical
+# `library-ci.yml` template ships (task #61).
+
+name: library-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - web
+          - server
+          - game_protocol
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install loft (build from source)
+        run: |
+          git clone --depth=1 https://github.com/jjstwerff/loft.git /tmp/loft
+          (cd /tmp/loft && cargo build --release)
+          echo "/tmp/loft/target/release" >> $GITHUB_PATH
+
+      - name: Interpreter — loft test
+        working-directory: ${{ matrix.package }}
+        run: loft test
+
+      - name: Native — loft --native test
+        working-directory: ${{ matrix.package }}
+        run: loft --native test
