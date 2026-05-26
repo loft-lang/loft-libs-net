@@ -209,9 +209,9 @@ checksum = "91b7969b1cfedfd9c7c44a0793ff6b349f5993cb69ea48fe1bc2868224007808"
 
 [[package]]
 name = "loft-ffi-build"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24f81c8c113de7481365efd31d99ec0df7024df808ac1e4bafd3f8330b1d16f9"
+checksum = "4d9bc066ecc80e0c6168ca709ef9834f37c87a21a2aa868a5ffe0e09cdc66f54"
 
 [[package]]
 name = "loft-web"
