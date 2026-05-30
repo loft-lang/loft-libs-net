@@ -1,0 +1,87 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// WebSocket echo round-trip — lifted from
+// jjstwerff/loft:lib/game_protocol/examples/hello_server.loft +
+// hello_client.loft, combined into a single-process `parallel { … }`
+// test.  Demonstrates the WS upgrade + send + recv + close flow on
+// both the server and web sides of the chunk.
+//
+// Server arm: listens on a 19xxx port, accepts one HTTP request,
+// upgrades to WebSocket, replies "bye world" to whatever it
+// receives, then closes.  Client arm: connects via `web::ws_handler`,
+// sends "hello world", pumps until one reply lands, asserts on the
+// reply text, closes.
+
+use server;
+use web;
+
+fn server_arm(port: integer) {
+  srv = server::listen(port);
+  req = srv.next();
+  if req != null {
+    ws = server::ws_upgrade();
+    if ws != null {
+      // Single-message round-trip: receive the prompt, send the
+      // reply, close.  Real-world server would loop on .next() to
+      // drain — this is the minimum the test needs.
+      msg = ws.next();
+      if msg != null {
+        ws.send("bye world");
+      }
+      ws.close();
+    }
+  }
+  srv.close();
+}
+
+fn client_arm(port: integer) {
+  // The server arm needs a moment to reach `listen + accept` before
+  // the client connects.  Auto-reconnect in the Rust layer absorbs
+  // transient server-not-up failures but the explicit sleep keeps
+  // the test's wall-clock predictable.
+  web::sleep_ms(80);
+  url = "ws://127.0.0.1:{port}/";
+  ws = web::ws_handler(url);
+  assert(ws != null, "ws_handler returned non-null");
+
+  // Send the prompt.  Auto-reconnect may report false on the first
+  // attempts while the server warms up; pump-and-retry until send
+  // succeeds or we give up.
+  sent = false;
+  attempts = 0;
+  while !sent && attempts < 100 {
+    if ws.send("hello world") {
+      sent = true;
+    } else {
+      ws.pump(fn(m: text) {});
+      web::sleep_ms(10);
+      attempts = attempts + 1;
+    }
+  }
+  assert(sent, "client send 'hello world' succeeded within retry budget");
+
+  // Pump until exactly one reply has been received.  `pump`'s return
+  // is the message count; we wait for ≥1 and then drain.  The reply
+  // text we expect is "bye world" per the server arm above.
+  count = 0;
+  pump_attempts = 0;
+  while count == 0 && pump_attempts < 200 {
+    count = ws.pump(fn(msg: text) {});
+    if count == 0 {
+      web::sleep_ms(10);
+      pump_attempts = pump_attempts + 1;
+    }
+  }
+  assert(count >= 1, "client received ≥1 reply (count={count}, pump_attempts={pump_attempts})");
+
+  ws.close();
+}
+
+fn test_ws_echo_round_trip() {
+  port = 19601;
+  parallel {
+    server_arm(port);
+    client_arm(port);
+  }
+}

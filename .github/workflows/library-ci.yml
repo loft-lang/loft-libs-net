@@ -1,14 +1,24 @@
-# PKG.REG library CI — canonical workflow shipped 2026-05-24 evening
-# as plan-12 Phase 6.5.  Every package in this chunk runs:
-#   1. loft test            — interpreter end-to-end
-#   2. loft --native test   — native codegen end-to-end
+# Canonical library-ci.yml for extracted loft library chunk repos.
 #
-# Until a public loft binary release exists we build loft from
-# source on the runner.  The .cargo/config.toml in the loft repo
-# forces -fuse-ld=mold, so we apt-get mold first; without it, cc
-# can't find a linker and even the proc-macro2 build script fails.
+# Copy this file into <chunk-repo>/.github/workflows/library-ci.yml and:
+#   1. Replace the `package` matrix list below with the chunk's actual packages.
+#   2. Drop into the chunk's repo root (no other edits needed).
 #
-# Cached on the loft.git HEAD SHA so repeat runs reuse the binary.
+# Behaviour:
+#   - One job per package — a single-package failure names the package in the
+#     PR check list.
+#   - Builds loft from source (jjstwerff/loft main) and caches against the
+#     loft Cargo.lock SHA, so steady-state cost is `cargo build` no-op after
+#     first install.
+#   - `LOFT_DENY_WARNINGS=1` by default — warnings fail CI.  A package opts
+#     out temporarily by placing a `.allow_warnings` file at its root (visible
+#     in PRs; remove it once warnings are cleaned up).
+#   - Optional Rust integration test step fires only if the package has a
+#     `native/tests/*.rs` directory (Phase 6t Tier 2: graphics gold-image
+#     regression et al.).
+#
+# See doc/claude/lib_plans/12-library-extraction/README.md § Phase 6.5
+# for the design rationale.
 
 name: library-ci
 
@@ -16,7 +26,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -24,38 +33,78 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package:
-          - web
-          - server
-          - game_protocol
+        # ── EDIT THIS LIST per chunk ────────────────────────────────
+        # loft-libs-core  → arguments, random, crypto
+        # loft-libs-net   → web, server, game_protocol
+        # loft-libs-graphics → graphics, imaging, gridmesh, shapes
+        package: [web, server, game_protocol]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install mold (loft's pinned linker)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mold
+        run: sudo apt-get update -y && sudo apt-get install -y mold
 
-      - name: Cache cargo registry
+      - name: Clone loft source
+        uses: actions/checkout@v4
+        with:
+          repository: jjstwerff/loft
+          path: loft-src
+
+      - name: Cache cargo registry + loft build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ runner.os }}-loft-v1
+            loft-src/target
+          key: loft-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: |
+            loft-
 
       - name: Build loft from source
+        working-directory: loft-src
         run: |
-          git clone --depth=1 https://github.com/jjstwerff/loft.git /tmp/loft
-          (cd /tmp/loft && cargo build --release --bin loft)
-
-      - name: Add loft to PATH
-        run: echo "/tmp/loft/target/release" >> "$GITHUB_PATH"
+          # `--lib --bin loft` is load-bearing.  Without explicit
+          # `--lib`, cargo emits `libloft.rlib` ONLY into
+          # `target/release/deps/` (no canonical-name copy in the
+          # parent `target/release/`).  `loft --native` then fails
+          # to resolve transitive crates like `mmap_storage` /
+          # `rand_core` with `error[E0463]: can't find crate for X
+          # which loft depends on` — verified on loft-libs-core 2026-
+          # 05-29: a clean `--bin loft` build reproduces the failure,
+          # adding `--lib` makes it green.  See plan-12 README §
+          # Phase 6.5 for the diagnostic.
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> $GITHUB_PATH
 
       - name: Interpreter — loft test
         working-directory: ${{ matrix.package }}
-        run: loft --interpret test
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --interpret --tests tests
 
       - name: Native — loft --native test
         working-directory: ${{ matrix.package }}
-        run: loft --native test
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --native --tests tests
+
+      # Phase 6t Tier 2/3 home — only fires when the library carries
+      # Rust-side integration tests (graphics gold-image, multiplayer
+      # subprocess harnesses, etc.).  Libraries without native/tests/
+      # skip the step cleanly.
+      - name: Rust integration tests (if present)
+        working-directory: ${{ matrix.package }}/native
+        if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
+        run: cargo test --release
+
+      # Phase 6t Tier 4 — exercise the library's transitive deps.
+      # `loft test --deps` walks every dep declared in the package's
+      # loft.toml (path-form deps first; registry-version deps require
+      # a loft.lock and become a no-op until that's in place) and runs
+      # its tests against the just-built loft.  Catches "we shipped a
+      # graphics version that broke gridmesh's tests in our
+      # environment" before downstream consumers do.
+      - name: Transitive dep tests
+        working-directory: ${{ matrix.package }}
+        run: loft test --deps
