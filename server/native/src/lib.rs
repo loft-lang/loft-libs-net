@@ -584,6 +584,30 @@ fn poll_one_client(id: i32) -> PollOutcome {
         // Anything else returns immediately: NoData on timeout,
         // Frame on a real text frame, Disconnected on close / EOF.
         loop {
+            // @PLN18 phase 00(b) — fast-idle poll.  The blocking 20 ms read
+            // timeout made every IDLE client cost ~21 ms per scan, so one empty
+            // drain sweep cost N x 21 ms (measured 252.5 ms at 12 clients) and
+            // the server tick collapsed (the "12 Hz" finding).  Peek the 2-byte
+            // WS header with the stream non-blocking first: nothing pending ->
+            // NoData in microseconds; bytes pending -> fall through to the
+            // existing blocking frame read (its remainder is already in
+            // flight, and the 20 ms timeout still bounds a torn frame).
+            let _ = stream.set_nonblocking(true);
+            let mut hdr = [0u8; 2];
+            let peeked = stream.peek(&mut hdr);
+            let _ = stream.set_nonblocking(false);
+            match peeked {
+                Ok(0) => return PollOutcome::Disconnected, // orderly close
+                Ok(n) if n < 2 => return PollOutcome::NoData, // header still arriving
+                Ok(_) => {}                                 // a frame is pending — read it
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    return PollOutcome::NoData;
+                }
+                Err(_) => return PollOutcome::Disconnected,
+            }
             match websocket::ws_read_frame_detailed(stream) {
                 websocket::ReadOutcome::NoData => return PollOutcome::NoData,
                 websocket::ReadOutcome::Closed => return PollOutcome::Disconnected,
