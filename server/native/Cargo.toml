@@ -9,3 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 loft-ffi = "0.1"
+loft-ffi-macros = "0.1"
+
+[build-dependencies]
+loft-ffi-build = "0.2"

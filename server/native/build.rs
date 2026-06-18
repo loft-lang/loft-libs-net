@@ -7,7 +7,7 @@
 //! against, so the register list cannot drift.  `include!`d by `src/lib.rs`.
 //!
 //! Plan-74: the `n_*` impls carry `#[loft_native]`, so this emits the
-//! `loft_register_bridges!` list too — the interpreter dispatches web
+//! `loft_register_bridges!` list too — the interpreter dispatches server
 //! through the generated uniform marshal bridges, not the legacy arm-set.
 
 fn main() {

@@ -7,6 +7,7 @@
 //! backoff capped at 10 seconds — see `ws_client::ensure_connected`.
 
 use loft_ffi::LoftStr;
+use loft_ffi_macros::loft_native;
 
 mod ws_client;
 
@@ -62,6 +63,7 @@ fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
 
 /// HTTP request. Returns status code; response body available via n_http_body.
 /// This function stores the body in a thread-local for the interpreter to retrieve.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_http_do(
     method_ptr: *const u8,
@@ -85,6 +87,7 @@ pub unsafe extern "C" fn n_http_do(
 }
 
 /// Return the body from the last HTTP request.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
@@ -102,6 +105,7 @@ thread_local! {
 /// non-negative handle unless the URL is malformed.  If the initial
 /// handshake fails, the slot is created in disconnected state and the
 /// next send/recv will trigger a reconnect attempt subject to backoff.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32 {
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
@@ -111,6 +115,7 @@ pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32
 /// Send a text message on a WebSocket.  Returns true on success, false if
 /// the connection is not currently live (caller may retry on the next
 /// poll — reconnect is automatic with backoff).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send(
     handle: i32,
@@ -131,6 +136,7 @@ pub unsafe extern "C" fn n_ws_client_send(
 /// # Safety
 ///
 /// `msg_ptr` / `msg_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_ws_client_send_binary(
     handle: i32,
@@ -144,12 +150,14 @@ pub unsafe extern "C" fn n_ws_client_send_binary(
 /// Poll for the next received message.  Returns true if a message was
 /// delivered (then call n_ws_client_message), false if the queue is
 /// empty or the connection is currently down.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_recv(handle: i32) -> bool {
     ws_client::recv(handle)
 }
 
 /// Get the last message returned by `n_ws_client_recv`.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_message() -> LoftStr {
     LAST_WS_MSG.with(|m| {
@@ -164,12 +172,14 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
 /// programs that handle binary frames check this after a successful
 /// recv to decide whether the message bytes are utf-8 text or a
 /// binary blob.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_opcode() -> u8 {
     ws_client::last_opcode()
 }
 
 /// Close a WebSocket session permanently (no reconnect).
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_client_close(handle: i32) {
     ws_client::close(handle);
@@ -180,6 +190,7 @@ pub extern "C" fn n_ws_client_close(handle: i32) {
 /// races would otherwise dominate (P229a — macOS scheduler is fast
 /// enough that two clients complete their move sequence with no
 /// observable overlap).  Negative / zero values are no-ops.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_sleep_ms(ms: i32) {
     if ms <= 0 {
@@ -210,18 +221,21 @@ thread_local! {
 }
 
 /// Empty the per-thread pack buffer.  Call before each blob.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_reset() {
     PACK_BUF.with(|b| b.borrow_mut().clear());
 }
 
 /// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u8(b: i32) {
     PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
 }
 
 /// Append a 2-byte little-endian unsigned value to the pack buffer.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u16_le(v: i32) {
     PACK_BUF.with(|buf| {
@@ -234,6 +248,7 @@ pub extern "C" fn n_pack_u16_le(v: i32) {
 /// Append a 4-byte little-endian unsigned value to the pack buffer.
 /// Loft `integer` is i32 — bit-cast to u32 to preserve the LE byte
 /// pattern across the sign boundary.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_u32_le(v: i32) {
     PACK_BUF.with(|buf| {
@@ -247,6 +262,7 @@ pub extern "C" fn n_pack_u32_le(v: i32) {
 /// whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
 /// The resulting `text` lives in `LAST_PACKED` until the next
 /// `n_pack_take` call — copy / send before reusing.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_pack_take() -> LoftStr {
     PACK_BUF.with(|buf| {
@@ -271,6 +287,7 @@ pub extern "C" fn n_pack_take() -> LoftStr {
 /// # Safety
 ///
 /// `text_ptr` / `text_len` must describe a valid byte slice.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn n_byte_at(idx: i32, text_ptr: *const u8, text_len: usize) -> i32 {
     if idx < 0 || (idx as usize) >= text_len {
@@ -292,6 +309,7 @@ thread_local! {
 }
 
 /// Clear the group handle list.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_clear() {
     WS_GROUP.with(|g| g.borrow_mut().clear());
@@ -299,6 +317,7 @@ pub extern "C" fn n_ws_group_clear() {
 }
 
 /// Add a handle to the group.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_add(handle: i32) {
     WS_GROUP.with(|g| g.borrow_mut().push(handle));
@@ -306,6 +325,7 @@ pub extern "C" fn n_ws_group_add(handle: i32) {
 
 /// Poll the group round-robin.  Returns the handle that has a message
 /// (read it with n_ws_client_message), or -1 if none are ready.
+#[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_ws_group_poll() -> i32 {
     let (handles, offset) = WS_GROUP.with(|g| {
