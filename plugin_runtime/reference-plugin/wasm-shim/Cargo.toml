@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# ZT-E E1 — wasm shim that exposes the six-export plugin ABI.
+#
+# This is the stand-in for a future `loft --native-wasm --exports` path: it
+# mirrors the counter logic from ../src/counter_plugin.loft and exports the six
+# ABI functions as named wasm exports with the (ptr,len)->(ptr,len) convention.
+# Build: cargo build --release --target wasm32-unknown-unknown
+#
+# Ultimately lives in: replaced by loft-source codegen (DESIGN.md § Follow-up).
+
+[package]
+name = "counter-plugin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
