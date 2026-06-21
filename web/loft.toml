@@ -1,6 +1,6 @@
 [package]
 name = "web"
-version = "0.2.0"
+version = "0.2.1"
 loft = ">=0.8"
 repository = "loft-libs-net"
 
@@ -14,3 +14,32 @@ crate = "loft-web"
 # Plan-74: native symbols are declared by co-located `#native "n_*"`
 # annotations in `src/web.loft` (scanned by `loft-ffi-build`), so the
 # register list lives in exactly one place — no `[native.functions]` table.
+
+[wasm.bridge]
+crate = "web-wasm"
+host_js = "wasm/host.js"
+
+[wasm.bridge.routes]
+# WebSocket lifecycle + latched-frame read — host imports under `loft_web`.
+n_ws_connect = "ws_client_connect"
+n_ws_client_send = "ws_client_send"
+n_ws_client_send_binary = "ws_client_send_binary"
+n_ws_client_recv = "ws_client_recv"
+n_ws_client_message = "ws_client_message"
+n_ws_client_opcode = "ws_client_opcode"
+n_ws_client_close = "ws_client_close"
+# Frame yield — the dedicated asyncify suspend point (loft_web.ws_yield).
+n_yield_frame = "yield_frame"
+# sleep_ms is a native pacing no-op on the browser (the event loop paces).
+n_sleep_ms = "sleep_ms"
+# Pure-compute pack builder + byte_at — no host import, byte-identical native.
+n_pack_reset = "pack_reset"
+n_pack_u8 = "pack_u8"
+n_pack_u16_le = "pack_u16_le"
+n_pack_u32_le = "pack_u32_le"
+n_pack_take = "pack_take"
+n_byte_at = "byte_at"
+# WsGroup — client-side stub on the browser (R2).
+n_ws_group_clear = "ws_group_clear"
+n_ws_group_add = "ws_group_add"
+n_ws_group_poll = "ws_group_poll"
