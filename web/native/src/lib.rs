@@ -349,3 +349,10 @@ pub extern "C" fn n_ws_group_poll() -> i32 {
 // exactly one place.  Adding a new web symbol is now a single edit to
 // `loft.toml` (plus the `pub unsafe extern "C" fn` body above).
 include!(concat!(env!("OUT_DIR"), "/loft_register_gen.rs"));
+
+/// Yield one frame to the host event loop (@PLN84 ZT-C).  Native no-op (no
+/// event loop); the browser target lowers this to the loft_web.ws_yield
+/// asyncify suspend (see wasm/src/lib.rs).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_yield_frame() {}

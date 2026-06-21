@@ -329,3 +329,9 @@ pub fn poll(self: WsGroup) -> WsGroupEvent {
   }
   WsGroupEvent { handle: h, message: ws_client_message_native() }
 }
+
+// Yield one frame to the host event loop (@PLN84 ZT-C); native no-op,
+// browser asyncify suspend (loft_web.ws_yield).  Call once per WS poll
+// iteration so the browser event loop can deliver WebSocket messages.
+pub fn frame_yield();
+#native "n_yield_frame"
