@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ZT-E E1 — the plugin ABI as a loft contract.
+//
+// The op-log CRDT plugin contract from the consumer's PLUGINS.md §9c.2.  A
+// collaborative-editing plugin implements these six pure, deterministic
+// functions; the host (loft server or browser client) drives them after the
+// signature gate (E2/E3) has admitted the module.
+//
+// Ultimately lives in: the plugin home library (TBD — loft-libs-net or a new
+// loft-libs-plugins chunk), as the public `Plugin` interface every plugin
+// implements.
+//
+// Boundary note: across the wasm boundary every value below is a byte buffer
+// (vector<u8>).  State / op / action / render output / snapshot are all opaque
+// bytes to the host — the plugin owns their meaning.  In loft source the types
+// are named for clarity; the wasm exports use a (ptr,len)->(ptr,len) ABI.
+
+/// One collaborative-editing plugin for one document type.  Every function is
+/// PURE and DETERMINISTIC: the same inputs produce the same outputs on every
+/// replica (the §8.17 convergence invariant).  The plugin never initiates a
+/// host call — the host calls in, the plugin returns values (§9c.5 sandbox).
+interface Plugin {
+    /// The empty CRDT state for a fresh document.
+    fn initial_state() -> vector<u8>;
+
+    /// Fold one decrypted op into the current state, returning the new state.
+    /// Ops must be commutative / order-independent so replays converge.
+    fn apply_op(state: vector<u8>, op: vector<u8>) -> vector<u8>;
+
+    /// Turn a local user action into an op to broadcast, or an empty vector
+    /// when the action produces no op.
+    fn make_op(state: vector<u8>, action: vector<u8>) -> vector<u8>;
+
+    /// Render commands (DOM / canvas) for the host UI — the host inspects this
+    /// output before showing it (§9c.5: render output is the only channel out).
+    fn render(state: vector<u8>) -> vector<u8>;
+
+    /// Serialise the current state to snapshot bytes (a rollover head, §9c.1).
+    fn snapshot(state: vector<u8>) -> vector<u8>;
+
+    /// Reconstruct CRDT state from snapshot bytes (the inverse of snapshot).
+    fn load_snapshot(bytes: vector<u8>) -> vector<u8>;
+}

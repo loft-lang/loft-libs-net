@@ -1,0 +1,29 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# ZT-E E2 — host plugin loader (the loft server binary's role).
+#
+# wasmtime-based loader that verifies a plugin module's Ed25519 signature
+# against a trusted-authors list BEFORE instantiation, fails closed, and then
+# drives the six-export plugin ABI.
+#
+# Ultimately lives in: the loft server's plugin subsystem (home TBD —
+# loft-libs-net/server plugin host, or a new loft-libs-plugins chunk).
+
+[package]
+name = "zt-e-host-loader"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Pinned to the same ed25519-dalek major the loft trust root / loft-keygen use,
+# so the host verifies exactly what loft-keygen signs.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+# Default features off keeps the build lean; cranelift+runtime is all the
+# embedder needs to compile + run a module.
+wasmtime = { version = "27", default-features = false, features = ["cranelift", "runtime"] }
+
+[[bin]]
+name = "load-plugin"
+path = "src/main.rs"

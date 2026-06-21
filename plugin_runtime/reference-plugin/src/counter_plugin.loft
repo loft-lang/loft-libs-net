@@ -1,0 +1,93 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// ZT-E E1 — reference plugin: a CRDT counter (the minimal op-log document).
+//
+// State is a single running total.  Each op is a signed delta (i64).  Deltas
+// are commutative, so applying the same set of ops in ANY order yields the same
+// total — the §8.17 convergence invariant, in the smallest possible CRDT.  This
+// is the loft source of truth for the six ABI functions; the wasm shim
+// (../wasm-shim/) mirrors this exact logic to produce the named wasm exports
+// until loft codegen can export named library functions directly (see DESIGN.md
+// § Follow-up).
+//
+// Encoding across the boundary is deliberately trivial so the host (Rust + JS)
+// can read/write it without a serializer:
+//   * state    = the 8 little-endian bytes of an i64 total.
+//   * op       = the 8 little-endian bytes of an i64 delta.
+//   * action   = the 8 little-endian bytes of an i64 the user wants to add.
+//   * snapshot = the same 8 bytes as state (a counter's state IS its snapshot).
+//   * render   = ASCII decimal text of the total (what the host UI shows).
+
+use plugin_abi;
+
+// --- the six ABI functions, as free functions over byte buffers ---
+
+/// Empty document: total = 0  ->  8 zero bytes.
+pub fn initial_state() -> vector<u8> {
+    return i64_to_le(0);
+}
+
+/// Fold one delta op into the total.
+pub fn apply_op(state: vector<u8>, op: vector<u8>) -> vector<u8> {
+    total = le_to_i64(state);
+    delta = le_to_i64(op);
+    return i64_to_le(total + delta);
+}
+
+/// A user action "add N" becomes the op encoding N.  An action of 0 produces
+/// no op (returns an empty vector — the "or nothing" case in §9c.2).
+pub fn make_op(state: vector<u8>, action: vector<u8>) -> vector<u8> {
+    n = le_to_i64(action);
+    if n == 0 {
+        return [];
+    }
+    return i64_to_le(n);
+}
+
+/// Render = the decimal total as ASCII bytes (the host UI shows this string).
+pub fn render(state: vector<u8>) -> vector<u8> {
+    total = le_to_i64(state);
+    return text_to_bytes("{total}");
+}
+
+/// A counter's snapshot is just its state.
+pub fn snapshot(state: vector<u8>) -> vector<u8> {
+    return state;
+}
+
+/// ...and loading a snapshot is just adopting those bytes as state.
+pub fn load_snapshot(bytes: vector<u8>) -> vector<u8> {
+    return bytes;
+}
+
+// --- little-endian i64 <-> bytes helpers (no stdlib dependency) ---
+
+fn i64_to_le(v: integer) -> vector<u8> {
+    out: vector<u8> = [];
+    x = v;
+    for _i in 0..8 {
+        out += [(x & 0xFF) as u8];
+        x = x >> 8;
+    }
+    return out;
+}
+
+fn le_to_i64(b: vector<u8>) -> integer {
+    if len(b) < 8 {
+        return 0;
+    }
+    v = 0;
+    for i in 0..8 {
+        v = v | ((b[i] as integer) << (i * 8));
+    }
+    return v;
+}
+
+fn text_to_bytes(s: text) -> vector<u8> {
+    out: vector<u8> = [];
+    for ch in s {
+        out += [ch as u8];
+    }
+    return out;
+}

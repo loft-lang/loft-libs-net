@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Standalone driver that proves the counter_plugin logic on the loft
+// interpreter (the loft-side source of truth the wasm shim mirrors).  Run:
+//   loft tools/zt-e-plugin-staging/reference-plugin/src/counter_demo.loft
+
+fn i64_to_le(v: integer) -> vector<u8> {
+    out: vector<u8> = [];
+    x = v;
+    for _i in 0..8 {
+        out += [(x & 0xFF) as u8];
+        x = x >> 8;
+    }
+    return out;
+}
+
+fn le_to_i64(b: vector<u8>) -> integer {
+    if len(b) < 8 {
+        return 0;
+    }
+    v = 0;
+    for i in 0..8 {
+        v = v | ((b[i] as integer) << (i * 8));
+    }
+    return v;
+}
+
+fn initial_state() -> vector<u8> {
+    return i64_to_le(0);
+}
+
+fn apply_op(state: vector<u8>, op: vector<u8>) -> vector<u8> {
+    return i64_to_le(le_to_i64(state) + le_to_i64(op));
+}
+
+fn render(state: vector<u8>) -> text {
+    return "{le_to_i64(state)}";
+}
+
+fn main() {
+    // initial_state -> 0
+    s = initial_state();
+    println("initial render = {render(s)}");
+
+    // apply three ops; +5, +10, -3  => 12
+    s = apply_op(s, i64_to_le(5));
+    s = apply_op(s, i64_to_le(10));
+    s = apply_op(s, i64_to_le(-3));
+    println("after +5 +10 -3 render = {render(s)}");
+
+    // convergence: apply the SAME ops in a different order => same 12
+    t = initial_state();
+    t = apply_op(t, i64_to_le(-3));
+    t = apply_op(t, i64_to_le(5));
+    t = apply_op(t, i64_to_le(10));
+    println("reordered render = {render(t)}");
+
+    ok = render(s) == "12" and render(t) == "12";
+    println("CONVERGES = {ok}");
+}
