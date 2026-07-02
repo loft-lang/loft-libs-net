@@ -6,12 +6,12 @@
 //   1. Single-client HTTP / WebSocket: `listen` + `next` + `ws_upgrade`.
 //      Use this for one-off request handlers and the shipped
 //      `for req in srv` iterator pattern.
-//   2. Multi-client WebSocket: `srv.run(on_connect, on_message)`.
+//   2. Multi-client WebSocket: `srv.run(on_event)`.
 //      The clean event-driven surface used by multiplayer servers.
-//      Loft programs register two callbacks and Rust drives the
-//      accept loop, per-client polling, and disconnect detection.
-//      Disconnects are silently absorbed — the loft program is
-//      not notified.
+//      Loft programs register ONE handler `fn(WsEvent)` and Rust
+//      drives the accept loop, per-client polling, and disconnect
+//      detection.  Disconnects are silently absorbed — the loft
+//      program is not notified.  See the `run` doc block below.
 
 // --- Types (must come before all functions) ---
 
