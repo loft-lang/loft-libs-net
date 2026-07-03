@@ -176,7 +176,7 @@ pub fn ws_upgrade() -> WebSocket {
   WebSocket { ws_id: h }
 }
 
-pub fn next(self: WebSocket) -> text {
+pub fn next(self: WebSocket) -> text? {
   if !ws_recv_native(self.ws_id) { return null; }
   ws_message_native()
 }
@@ -319,9 +319,14 @@ pub fn poll_event(self: Server) -> WsEvent {
       raw = ws_event_payload_native();
       i   = raw.find(":");
       if i != null {
-        return WsEvent { connected: false, message: true, http: false,
-                         cid: cid, msg_id: raw[..i] as integer,
-                         payload: raw[i + 1..], path: "" };
+        // A non-numeric id prefix is as malformed as a missing ":" —
+        // warn-and-drop below rather than masking it as id 0.
+        mid = raw[..i] as integer;
+        if mid != null {
+          return WsEvent { connected: false, message: true, http: false,
+                           cid: cid, msg_id: mid ?? 0,
+                           payload: raw[i + 1..], path: "" };
+        }
       }
       log_warn("server: dropped malformed frame from {cid}: {raw}");
     }
