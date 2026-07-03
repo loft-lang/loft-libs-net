@@ -13,10 +13,18 @@ loft install web
 
 ## Surface
 
-- `http_get(url) -> text`
-- `http_do(method, url, body) -> text` — `POST`/`PUT`/`DELETE` etc.
-- `ws_connect(url, origin)` + `ws_client_send` / `ws_client_recv` for WebSocket client.
-- Binary-frame packing helpers: `pack_u8`/`pack_u16_le`/`pack_u32_le` + `pack_take`.
+Per-function target support matters here — the two halves differ:
+
+- `http_get(url) -> text` — **interpret / native / native-wasm only** (no browser)
+- `http_do(method, url, body) -> text` — `POST`/`PUT`/`DELETE` etc. — **same: no browser**
+- `ws_connect(url, origin)` + `ws_client_send` / `ws_client_recv` / `try_recv` for
+  WebSocket client — **all four targets** (the `[wasm.bridge]` routes these in `--html`)
+- Binary-frame packing helpers: `pack_u8`/`pack_u16_le`/`pack_u32_le` + `pack_take` —
+  pure loft, all targets.
+
+**WebSocket is the only browser-bridged transport.**  The `http_*` calls have no
+`--html` bridge — in the browser, let JS own the network (`fetch`) and hand loft
+the bytes via the engine's `host_input()`.
 
 Native code (cdylib `loft_web`) backs the HTTP + WebSocket calls
 via the ureq + tungstenite crates.
