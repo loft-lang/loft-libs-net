@@ -23,6 +23,8 @@ thread_local! {
     /// existing HTTP API keeps its `body`-only semantics while
     /// `n_ws_upgrade` can find `Sec-WebSocket-Key`.
     static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Buffer for the last `n_tcp_slice` result (binary-safe byte slice).
+    static SLICE_BUF: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, String)> {
@@ -214,6 +216,16 @@ pub extern "C" fn n_tcp_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
 }
 
+/// Get the request headers of the last accepted request as newline-separated
+/// `Key: Value` lines (already parsed by `parse_request`).  The loft side splits
+/// them into a `vector<text>` and looks up individual headers (Range, If-Range,
+/// Origin, …).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_tcp_headers() -> LoftStr {
+    LAST_HEADERS.with(|h| loft_ffi::ret_ref(&h.borrow()))
+}
+
 /// Send an HTTP response on the current connection and close it.
 /// Defaults to `Content-Type: text/plain; charset=utf-8` for backward
 /// compatibility with v1/v2 server programs.  Use
@@ -257,20 +269,37 @@ pub unsafe extern "C" fn n_tcp_respond_typed(
     unsafe { write_response(status, ct, body_ptr, body_len) }
 }
 
-unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, body_len: usize) {
-    let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) }.unwrap_or("");
-    let status_text = match status {
+fn status_text(status: u16) -> &'static str {
+    match status {
         200 => "OK",
         201 => "Created",
         204 => "No Content",
+        206 => "Partial Content",
+        304 => "Not Modified",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        416 => "Range Not Satisfiable",
         500 => "Internal Server Error",
         _ => "Unknown",
-    };
+    }
+}
+
+fn send_and_close(bytes: &[u8]) {
+    CURRENT_CONN.with(|c| {
+        if let Some(ref mut stream) = *c.borrow_mut() {
+            let _ = stream.write_all(bytes);
+            let _ = stream.flush();
+        }
+    });
+    // Close the connection.
+    CURRENT_CONN.with(|c| *c.borrow_mut() = None);
+}
+
+unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, body_len: usize) {
+    let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) }.unwrap_or("");
     let response = format!(
-        "HTTP/1.1 {status} {status_text}\r\n\
+        "HTTP/1.1 {status} {}\r\n\
          Content-Length: {}\r\n\
          Content-Type: {content_type}\r\n\
          Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n\
@@ -278,16 +307,85 @@ unsafe fn write_response(status: u16, content_type: &str, body_ptr: *const u8, b
          Expires: 0\r\n\
          Connection: close\r\n\r\n\
          {body}",
+        status_text(status),
         body.len()
     );
-    CURRENT_CONN.with(|c| {
-        if let Some(ref mut stream) = *c.borrow_mut() {
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.flush();
+    send_and_close(response.as_bytes());
+}
+
+/// Send a response with caller-controlled headers (DESIGN-http-data-serving S2).
+/// `headers` is newline-separated `Key: Value` lines; the caller owns caching,
+/// Content-Type, Content-Range, and the CORS headers.  `Content-Length` is
+/// auto-added from the body byte length UNLESS the caller supplied one (a HEAD
+/// reply passes an explicit length with an empty body); `Connection: close` is
+/// always appended.  The body is written verbatim, so binary payloads survive.
+///
+/// # Safety
+///
+/// `body_ptr`/`body_len` and `headers_ptr`/`headers_len` must each describe a
+/// valid byte slice or be `(NULL, 0)`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_respond_full(
+    status: u16,
+    body_ptr: *const u8,
+    body_len: usize,
+    headers_ptr: *const u8,
+    headers_len: usize,
+) {
+    let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) }.unwrap_or("");
+    let headers = unsafe { loft_ffi::text_opt(headers_ptr, headers_len) }.unwrap_or("");
+    let mut block = String::new();
+    let mut has_len = false;
+    for line in headers.split('\n') {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() {
+            continue;
         }
-    });
-    // Close the connection
-    CURRENT_CONN.with(|c| *c.borrow_mut() = None);
+        if line.to_ascii_lowercase().starts_with("content-length:") {
+            has_len = true;
+        }
+        block.push_str(line);
+        block.push_str("\r\n");
+    }
+    if !has_len {
+        block.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    let response = format!(
+        "HTTP/1.1 {} {}\r\n{block}Connection: close\r\n\r\n{body}",
+        status,
+        status_text(status)
+    );
+    send_and_close(response.as_bytes());
+}
+
+/// Binary-safe byte slice of `body`: bytes `[off, off+len)`, clamped to the
+/// body length.  Used by loft `serve_range` to cut a partial-content slice
+/// without loft's char-indexing, which would re-encode bytes > 127 and corrupt
+/// binary data.  The result lives in a thread-local until the next call.
+///
+/// # Safety
+///
+/// `body_ptr` / `body_len` must describe a valid byte slice or be `(NULL, 0)`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_slice(
+    body_ptr: *const u8,
+    body_len: usize,
+    off: i64,
+    len: i64,
+) -> LoftStr {
+    let body: &[u8] = if body_ptr.is_null() || body_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(body_ptr, body_len) }
+    };
+    let start = (off.max(0) as usize).min(body.len());
+    let end = start.saturating_add(len.max(0) as usize).min(body.len());
+    SLICE_BUF.with(|b| {
+        *b.borrow_mut() = unsafe { String::from_utf8_unchecked(body[start..end].to_vec()) };
+        loft_ffi::ret_ref(&b.borrow())
+    })
 }
 
 /// Close a listener.
@@ -619,7 +717,7 @@ fn poll_one_client(id: i32) -> PollOutcome {
             match peeked {
                 Ok(0) => return PollOutcome::Disconnected, // orderly close
                 Ok(n) if n < 2 => return PollOutcome::NoData, // header still arriving
-                Ok(_) => {}                                 // a frame is pending — read it
+                Ok(_) => {}                                // a frame is pending — read it
                 Err(e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
                         || e.kind() == std::io::ErrorKind::TimedOut =>

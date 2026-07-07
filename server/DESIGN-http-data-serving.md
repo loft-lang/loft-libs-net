@@ -5,6 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # server: HTTP byte-range data serving (Range · headers · CORS · HEAD)
 
+**Status: delivered 2026-07-07** — S1–S6 implemented and verified (a curl matrix
+for each step + a loft-client↔loft-server capstone round-trip: `http_get_range`
+returned the exact slice, `http_size` returned the size via HEAD).
+
 The mirror half of the `web` client's #517 data-access stack. The client can now
 **request** byte ranges, read response headers, and query size; this lets the loft
 `server` **answer** them, so a loft-in-the-browser client can fetch tile ranges
