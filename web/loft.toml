@@ -20,6 +20,12 @@ crate = "web-wasm"
 host_js = "wasm/host.js"
 
 [wasm.bridge.routes]
+# HTTP client — browser fetch() via host imports; the async fetch is driven to
+# completion through the same ws_yield asyncify suspend the WebSocket poll uses.
+n_http_do = "http_do"
+n_http_body = "http_body"
+n_http_headers = "http_headers"
+n_http_size = "http_size"
 # WebSocket lifecycle + latched-frame read — host imports under `loft_web`.
 n_ws_connect = "ws_client_connect"
 n_ws_client_send = "ws_client_send"
