@@ -11,18 +11,23 @@ use loft_ffi_macros::loft_native;
 
 mod ws_client;
 
+/// Perform an HTTP request and return `(status, body_bytes, response_headers)`.
+/// The body is read as raw bytes (NOT `into_string`) so binary payloads with
+/// embedded NUL bytes survive intact — the same convention as the `pack_*` /
+/// `byte_at` builder.  `status == 0` signals a transport error (no response).
 fn do_request(
     method: &str,
     url: &str,
     body: Option<&str>,
     headers: &[(&str, &str)],
-) -> (i32, String) {
+) -> (i32, Vec<u8>, Vec<(String, String)>) {
     let mut req = match method {
         "GET" => ureq::get(url),
         "POST" => ureq::post(url),
         "PUT" => ureq::put(url),
         "DELETE" => ureq::delete(url),
-        _ => return (0, String::new()),
+        "HEAD" => ureq::head(url),
+        _ => return (0, Vec::new(), Vec::new()),
     };
     for (k, v) in headers {
         req = req.set(k, v);
@@ -32,18 +37,22 @@ fn do_request(
     } else {
         req.call()
     };
-    match response {
-        Ok(resp) => {
-            let status = resp.status() as i32;
-            let body = resp.into_string().unwrap_or_default();
-            (status, body)
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            (code as i32, body)
-        }
-        Err(_) => (0, String::new()),
-    }
+    // Both success and HTTP-error responses carry a body + headers worth
+    // returning (a 206 range read, a 404 page, …); only transport failures don't.
+    let resp = match response {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(_, resp)) => resp,
+        Err(_) => return (0, Vec::new(), Vec::new()),
+    };
+    let status = resp.status() as i32;
+    let resp_headers: Vec<(String, String)> = resp
+        .headers_names()
+        .into_iter()
+        .filter_map(|name| resp.header(&name).map(|v| (name.clone(), v.to_string())))
+        .collect();
+    let mut body_bytes = Vec::new();
+    let _ = resp.into_reader().read_to_end(&mut body_bytes);
+    (status, body_bytes, resp_headers)
 }
 
 fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
@@ -80,23 +89,59 @@ pub unsafe extern "C" fn n_http_do(
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
     let headers_text = unsafe { loft_ffi::text_opt(headers_ptr, headers_len) }.unwrap_or("");
     let headers = parse_headers(headers_text);
-    let (status, response_body) = do_request(method, url, body, &headers);
-    // Store body for n_http_body to return.
-    LAST_BODY.with(|b| *b.borrow_mut() = response_body);
+    let (status, body_bytes, resp_headers) = do_request(method, url, body, &headers);
+    // Store the raw body bytes for n_http_body (binary-safe: a String built via
+    // from_utf8_unchecked carries NUL bytes verbatim, read back with byte_at).
+    LAST_BODY.with(|b| *b.borrow_mut() = unsafe { String::from_utf8_unchecked(body_bytes) });
+    // Store response headers as newline-separated "Key: Value" for n_http_headers.
+    let headers_joined = resp_headers
+        .iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    LAST_HEADERS.with(|h| *h.borrow_mut() = headers_joined);
     status
 }
 
-/// Return the body from the last HTTP request.
+/// Return the body from the last HTTP request (raw bytes, NUL-preserving).
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn n_http_body() -> LoftStr {
     LAST_BODY.with(|b| loft_ffi::ret_ref(&b.borrow()))
 }
 
+/// Return the response headers from the last HTTP request as newline-separated
+/// `Key: Value` lines (the loft side splits them into a `vector<text>`).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_http_headers() -> LoftStr {
+    LAST_HEADERS.with(|h| loft_ffi::ret_ref(&h.borrow()))
+}
+
+/// Resolve a URL's size via a `HEAD` request → `Content-Length`, without
+/// downloading the body.  Returns the byte length, or `-1` if the request
+/// failed or the server did not report a length.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_http_size(url_ptr: *const u8, url_len: usize) -> i64 {
+    let url = unsafe { loft_ffi::text(url_ptr, url_len) };
+    let (status, _body, headers) = do_request("HEAD", url, None, &[]);
+    if !(200..400).contains(&status) {
+        return -1;
+    }
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.parse::<i64>().ok())
+        .unwrap_or(-1)
+}
+
 use std::cell::RefCell;
+use std::io::Read;
 
 thread_local! {
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
+    static LAST_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 // ── WebSocket client C-ABI exports ───────────────────────────────────────

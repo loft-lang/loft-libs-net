@@ -7,7 +7,8 @@
 // The result of an HTTP request.
 pub struct HttpResponse {
   status: integer,
-  body: text
+  body: text,
+  headers: vector<text>
 }
 
 // Returns true when the status code is in the 200-299 range.
@@ -22,6 +23,23 @@ fn http_do(method: text, url: text, body: text, headers: text) -> integer;
 
 fn http_body() -> text;
 #native
+
+// Response headers from the last request, as newline-separated "Key: Value".
+fn http_headers() -> text;
+#native
+
+// Internal: resolve a URL's byte size via a HEAD request (Content-Length).
+// Returns -1 if the request failed or the server omitted the length on HEAD;
+// the public `http_size` falls back to a range read in that case.
+fn http_head_size(url: text) -> integer;
+#native "n_http_size"
+
+// Build the full response from the last native call: status, binary-safe body
+// (raw bytes, NUL-preserving via the pack/byte_at convention), and response
+// headers split into a vector.
+fn make_response(status: integer) -> HttpResponse {
+  HttpResponse { status: status, body: http_body(), headers: http_headers().split('\n') }
+}
 
 // Internal: serialize headers vector to newline-separated "Key: Value" text.
 fn join_headers(headers: vector<text>) -> text {
@@ -38,25 +56,25 @@ fn join_headers(headers: vector<text>) -> text {
 // Send a GET request.
 pub fn http_get(url: text) -> HttpResponse {
   status = http_do("GET", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // Send a POST request with a body.
 pub fn http_post(url: text, body: text) -> HttpResponse {
   status = http_do("POST", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // Send a PUT request with a body.
 pub fn http_put(url: text, body: text) -> HttpResponse {
   status = http_do("PUT", url, body, "");
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // Send a DELETE request.
 pub fn http_delete(url: text) -> HttpResponse {
   status = http_do("DELETE", url, "", "");
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // --- HTTP functions with custom headers ---
@@ -65,25 +83,78 @@ pub fn http_delete(url: text) -> HttpResponse {
 // GET with custom headers.
 pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("GET", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // POST with custom headers.
 pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("POST", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // PUT with custom headers.
 pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse {
   status = http_do("PUT", url, body, join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
 }
 
 // DELETE with custom headers.
 pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
   status = http_do("DELETE", url, "", join_headers(headers));
-  HttpResponse { status: status, body: http_body() }
+  make_response(status)
+}
+
+// --- Byte-range reads (partial content) ---
+
+// Read the byte range [offset, offset+len) of a remote file via a Range
+// request. Returns status 206 (Partial Content) with the raw bytes in `body`
+// when the server honours ranges; a server that ignores Range returns 200 with
+// the full body. Read the bytes with `byte_at(response.body, i)`.
+pub fn http_get_range(url: text, offset: integer, len: integer) -> HttpResponse {
+  last = offset + len - 1;
+  status = http_do("GET", url, "", "Range: bytes={offset}-{last}");
+  make_response(status)
+}
+
+// Byte-range read with extra custom headers (e.g. If-Range / If-None-Match).
+pub fn http_get_range_h(url: text, offset: integer, len: integer, headers: vector<text>) -> HttpResponse {
+  last = offset + len - 1;
+  range = "Range: bytes={offset}-{last}";
+  all = join_headers(headers);
+  combined = if all.len() > 0 { "{all}\n{range}" } else { range };
+  status = http_do("GET", url, "", combined);
+  make_response(status)
+}
+
+// --- Size query ---
+
+// Extract the total size from a "Content-Range: bytes X-Y/TOTAL" header line,
+// or -1 if no such header is present.
+fn content_range_total(headers: vector<text>) -> integer {
+  for h in headers {
+    if h.to_lowercase().starts_with("content-range:") {
+      parts = h.split('/');
+      if parts.len() >= 2 {
+        return parts[parts.len() - 1].trim() as integer ?? -1;
+      }
+    }
+  }
+  -1
+}
+
+// Resolve a URL's total byte size without downloading it. Tries a HEAD request
+// (Content-Length); if the server omits the length on HEAD (some CDNs — e.g.
+// github-raw — only report it on GET), falls back to a 1-byte range read and
+// takes the total from the Content-Range header. Returns -1 if size is
+// unavailable.
+pub fn http_size(url: text) -> integer {
+  n = http_head_size(url);
+  if n >= 0 { return n; }
+  r = http_get_range(url, 0, 1);
+  if r.status == 206 || r.status == 200 {
+    return content_range_total(r.headers);
+  }
+  -1
 }
 
 // --- WebSocket client ---
