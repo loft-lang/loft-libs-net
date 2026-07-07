@@ -66,6 +66,29 @@ unsafe extern "C" {
     /// Asyncify suspend point: return to the JS event loop for one frame.
     /// Instrumented by `wasm-opt --asyncify --pass-arg=…,loft_web.ws_yield`.
     fn ws_yield();
+
+    // HTTP fetch (async in the browser; driven to completion here via the same
+    // ws_yield asyncify suspend). `http_start` kicks off `fetch()` and returns a
+    // handle; the wasm side polls + yields until `http_poll` reports done, then
+    // reads status/body/headers.
+    fn http_start(
+        method_ptr: *const u8,
+        method_len: usize,
+        url_ptr: *const u8,
+        url_len: usize,
+        body_ptr: *const u8,
+        body_len: usize,
+        headers_ptr: *const u8,
+        headers_len: usize,
+    ) -> i32;
+    /// 1 = done, 0 = pending, -1 = network/transport error.
+    fn http_poll(h: i32) -> i32;
+    fn http_status(h: i32) -> i32;
+    fn http_body_len(h: i32) -> i32;
+    fn http_body_copy(h: i32, ptr: *mut u8);
+    fn http_headers_len(h: i32) -> i32;
+    fn http_headers_copy(h: i32, ptr: *mut u8);
+    fn http_free(h: i32);
 }
 
 // Non-wasm fallbacks so the crate compiles for `cargo check` on the host (the
@@ -93,6 +116,34 @@ mod host_stub {
     }
     pub unsafe fn ws_close(_: i32) {}
     pub unsafe fn ws_yield() {}
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn http_start(
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+    ) -> i32 {
+        -1
+    }
+    pub unsafe fn http_poll(_: i32) -> i32 {
+        -1
+    }
+    pub unsafe fn http_status(_: i32) -> i32 {
+        0
+    }
+    pub unsafe fn http_body_len(_: i32) -> i32 {
+        0
+    }
+    pub unsafe fn http_body_copy(_: i32, _: *mut u8) {}
+    pub unsafe fn http_headers_len(_: i32) -> i32 {
+        0
+    }
+    pub unsafe fn http_headers_copy(_: i32, _: *mut u8) {}
+    pub unsafe fn http_free(_: i32) {}
 }
 #[cfg(not(target_arch = "wasm32"))]
 use host_stub::*;
@@ -106,6 +157,8 @@ thread_local! {
     static LAST_MSG: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static LAST_OP: RefCell<i32> = const { RefCell::new(0) };
     static PACK_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static LAST_HTTP_BODY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static LAST_HTTP_HEADERS: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 // ── WebSocket lifecycle ─────────────────────────────────────────────────────
@@ -171,6 +224,89 @@ pub fn ws_client_close(_stores: &mut Stores, handle: i32) {
 /// `web::yield_frame()` is a no-op.
 pub fn yield_frame(_stores: &mut Stores) {
     unsafe { ws_yield() }
+}
+
+// ── HTTP client (browser fetch, driven via the asyncify suspend) ────────────
+
+/// Kick off a fetch and drive it to completion by polling + yielding to the JS
+/// event loop (the same `ws_yield` asyncify suspend the WebSocket poll uses),
+/// then latch body + headers and return the status. `0` = transport error.
+fn http_run(method: &str, url: &str, body: &str, headers: &str) -> i32 {
+    let h = unsafe {
+        http_start(
+            method.as_ptr(),
+            method.len(),
+            url.as_ptr(),
+            url.len(),
+            body.as_ptr(),
+            body.len(),
+            headers.as_ptr(),
+            headers.len(),
+        )
+    };
+    if h < 0 {
+        return 0;
+    }
+    loop {
+        match unsafe { http_poll(h) } {
+            1 => break,
+            p if p < 0 => {
+                unsafe { http_free(h) };
+                return 0;
+            }
+            _ => unsafe { ws_yield() },
+        }
+    }
+    let status = unsafe { http_status(h) };
+    let bn = unsafe { http_body_len(h) }.max(0) as usize;
+    let mut bv = vec![0u8; bn];
+    if bn > 0 {
+        unsafe { http_body_copy(h, bv.as_mut_ptr()) };
+    }
+    let hn = unsafe { http_headers_len(h) }.max(0) as usize;
+    let mut hv = vec![0u8; hn];
+    if hn > 0 {
+        unsafe { http_headers_copy(h, hv.as_mut_ptr()) };
+    }
+    unsafe { http_free(h) };
+    LAST_HTTP_BODY.with(|b| *b.borrow_mut() = bv);
+    LAST_HTTP_HEADERS.with(|s| *s.borrow_mut() = unsafe { String::from_utf8_unchecked(hv) });
+    status
+}
+
+/// `n_http_do(method, url, body, headers) -> integer` — the browser fetch path.
+pub fn http_do(_stores: &mut Stores, method: &str, url: &str, body: &str, headers: &str) -> i32 {
+    http_run(method, url, body, headers)
+}
+
+/// `n_http_body() -> text` — latched body bytes (binary-safe, NUL-preserving).
+pub fn http_body(_stores: &mut Stores) -> String {
+    LAST_HTTP_BODY.with(|b| unsafe { String::from_utf8_unchecked(b.borrow().clone()) })
+}
+
+/// `n_http_headers() -> text` — latched response headers, newline-joined.
+pub fn http_headers(_stores: &mut Stores) -> String {
+    LAST_HTTP_HEADERS.with(|s| s.borrow().clone())
+}
+
+/// `n_http_size(url) -> integer` — HEAD → Content-Length, or -1. The loft-side
+/// `http_size` falls back to a range read (Content-Range) when this is -1 —
+/// which also covers browsers where CORS hides Content-Length on a HEAD.
+pub fn http_size(_stores: &mut Stores, url: &str) -> i32 {
+    let status = http_run("HEAD", url, "", "");
+    if !(200..400).contains(&status) {
+        return -1;
+    }
+    LAST_HTTP_HEADERS.with(|s| {
+        for line in s.borrow().split('\n') {
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                if let Ok(n) = v.trim().parse::<i32>() {
+                    return n;
+                }
+            }
+        }
+        -1
+    })
 }
 
 /// `n_sleep_ms(ms)` — no-op on wasm (the host event loop is the pacing

@@ -13,21 +13,36 @@ loft install web
 
 ## Surface
 
-Per-function target support matters here — the two halves differ:
+### HTTP client
 
-- `http_get(url) -> text` — **interpret / native / native-wasm only** (no browser)
-- `http_do(method, url, body) -> text` — `POST`/`PUT`/`DELETE` etc. — **same: no browser**
-- `ws_connect(url, origin)` + `ws_client_send` / `ws_client_recv` / `try_recv` for
-  WebSocket client — **all four targets** (the `[wasm.bridge]` routes these in `--html`)
-- Binary-frame packing helpers: `pack_u8`/`pack_u16_le`/`pack_u32_le` + `pack_take` —
-  pure loft, all targets.
+Requests return `HttpResponse { status: integer, body: text, headers: vector<text> }`.
+The `body` carries **raw bytes** — binary-safe and NUL-preserving; read individual
+bytes with `byte_at(response.body, i)`. `headers` are the response's `"Key: Value"`
+lines.
 
-**WebSocket is the only browser-bridged transport.**  The `http_*` calls have no
-`--html` bridge — in the browser, let JS own the network (`fetch`) and hand loft
-the bytes via the engine's `host_input()`.
+- `http_get(url)` · `http_post(url, body)` · `http_put(url, body)` · `http_delete(url)`
+  → `HttpResponse`
+- `*_h(...)` variants take a `vector<text>` of `"Key: Value"` **request** headers
+- `http_size(url) -> integer` — total byte size via `HEAD` (Content-Length), with a
+  Content-Range fallback for CDNs that omit the length on `HEAD` (e.g. github-raw);
+  `-1` if unavailable
+- `http_get_range(url, offset, len)` · `_h(...)` → `HttpResponse` — a
+  `Range: bytes=` read (**206 Partial Content**) returning just the requested slice,
+  for partial reads of a large remote file
+- `response.ok()` — true for a 2xx status
 
-Native code (cdylib `loft_web`) backs the HTTP + WebSocket calls
-via the ureq + tungstenite crates.
+Backed by the native cdylib `loft_web` (ureq). **Native / interpret today; a browser
+`fetch()` backend is in progress (#517 Phase B) so a loft-in-wasm client can fetch
+the same way.**
+
+### WebSocket client — all targets
+
+`ws_handler(url)` + `send` / `try_recv` / `pump` / `close`, browser-bridged via the
+`[wasm.bridge]` routes (the sole browser transport until the HTTP fetch backend lands).
+
+### Binary packing — all targets, pure loft
+
+`pack_reset` / `pack_u8` / `pack_u16_le` / `pack_u32_le` / `pack_take` + `byte_at`.
 
 ## Provenance
 

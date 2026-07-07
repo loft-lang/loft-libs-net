@@ -136,6 +136,82 @@
       conns.delete(h);
     };
 
+    // ── HTTP fetch (async; the wasm side polls http_poll + yields until done) ──
+    // handle -> { done, error, status, body: Uint8Array, headers: string }
+    const fetches = new Map();
+    let nextFetch = 0;
+
+    // Parse the wasm "Key: Value\n…" request-header text into a fetch headers obj.
+    function parseReqHeaders(text) {
+      const h = {};
+      for (const line of text.split('\n')) {
+        const i = line.indexOf(':');
+        if (i > 0) h[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      }
+      return h;
+    }
+
+    ns.http_start = function (mPtr, mLen, uPtr, uLen, bPtr, bLen, hPtr, hLen) {
+      const method = dec.decode(bytesAt(mPtr, mLen).slice());
+      const url = dec.decode(bytesAt(uPtr, uLen).slice());
+      const body = bLen > 0 ? bytesAt(bPtr, bLen).slice() : undefined;
+      const headers = hLen > 0 ? parseReqHeaders(dec.decode(bytesAt(hPtr, hLen).slice())) : undefined;
+      const id = nextFetch++;
+      const entry = { done: false, error: false, status: 0, body: new Uint8Array(0), headers: '' };
+      fetches.set(id, entry);
+      const init = { method, headers };
+      if (body !== undefined && method !== 'GET' && method !== 'HEAD') init.body = body;
+      fetch(url, init)
+        .then(async (resp) => {
+          entry.status = resp.status;
+          // Only CORS-exposed headers are visible cross-origin; the server must
+          // send Access-Control-Expose-Headers for Content-Range/Content-Length.
+          const hdrs = [];
+          resp.headers.forEach((v, k) => hdrs.push(k + ': ' + v));
+          entry.headers = hdrs.join('\n');
+          entry.body = new Uint8Array(await resp.arrayBuffer());
+          entry.done = true;
+        })
+        .catch(() => {
+          entry.error = true;
+          entry.done = true;
+        });
+      return id;
+    };
+
+    ns.http_poll = function (h) {
+      const e = fetches.get(h);
+      if (!e) return -1;
+      if (!e.done) return 0;
+      return e.error ? -1 : 1;
+    };
+    ns.http_status = function (h) {
+      const e = fetches.get(h);
+      return e ? e.status : 0;
+    };
+    ns.http_body_len = function (h) {
+      const e = fetches.get(h);
+      return e ? e.body.length : 0;
+    };
+    ns.http_body_copy = function (h, ptr) {
+      const e = fetches.get(h);
+      if (!e) return;
+      new Uint8Array(getMem().buffer, ptr, e.body.length).set(e.body);
+    };
+    ns.http_headers_len = function (h) {
+      const e = fetches.get(h);
+      return e ? enc.encode(e.headers).length : 0;
+    };
+    ns.http_headers_copy = function (h, ptr) {
+      const e = fetches.get(h);
+      if (!e) return;
+      const bytes = enc.encode(e.headers);
+      new Uint8Array(getMem().buffer, ptr, bytes.length).set(bytes);
+    };
+    ns.http_free = function (h) {
+      fetches.delete(h);
+    };
+
     // Asyncify suspend: hand control back to the JS event loop for one frame.
     // `ctrl.ac` is the AsyncifyCtrl (the --html preamble / wasm_ws_repro.mjs
     // sets it after instantiate).  No-op if asyncify is absent (compute-only

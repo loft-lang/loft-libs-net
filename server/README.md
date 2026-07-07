@@ -42,8 +42,9 @@ fn main() {
 }
 ```
 
-A `Request` has three fields: `method` (`"GET"` / `"POST"` / …), `path`, and
-`body` (the raw request body, empty for GET).
+A `Request` has these fields: `method` (`"GET"` / `"POST"` / …), `path`,
+`body` (the raw request body, empty for GET), and `headers` (the request
+headers as `"Key: Value"` lines; use `req.header(name)` to look one up).
 
 Responders (each sends the reply and closes the connection):
 
@@ -61,6 +62,40 @@ Responders (each sends the reply and closes the connection):
 `null` immediately when no connection is pending, so one loop can interleave
 HTTP accepts with other work (e.g. the multi-client WebSocket pump below).
 `srv.close()` shuts the listener down.
+
+## HTTP data serving — byte ranges, headers, CORS
+
+The `web` client's #517 data-access stack (`http_get_range`, `http_size`,
+response headers) has a matching server side, so a loft server can serve binary
+byte-range requests — including to a browser (wasm) client.
+
+- `req.header(name) -> text` — read a request header case-insensitively
+  (`"Range"`, `"Origin"`, `"If-None-Match"`); `""` if absent. (`Request` also
+  carries the full `headers: vector<text>`.)
+- `req.respond_with_headers(status, body, headers)` — reply with your own header
+  lines (`Content-Range`, `ETag`, CORS, …); `Content-Length` is added
+  automatically and the body is written **verbatim (binary-safe)**. Status codes
+  now include `206`, `304`, `416`.
+- `req.serve_range(body, extra) -> boolean` — serve a `Range: bytes=off-last`
+  request as `206 Partial Content` (or `416`), adding `extra` headers; returns
+  `false` when there is no Range header so the caller can serve the full body.
+- `cors_headers(origin) -> vector<text>` — the CORS headers a browser needs to
+  read `Content-Range` / `ETag` cross-origin.
+
+The one-call helper ties it together:
+
+```loft
+srv = server::listen(8080);
+etag = "\"tiles-v1\"";
+for req in srv {
+  req.serve_data(read_tile_block(), etag, "*");   // range + CORS + HEAD + 304
+}
+```
+
+`serve_data(body, etag, origin)` handles an `OPTIONS` preflight (`204` + CORS),
+`If-None-Match` (`304`), `HEAD` (headers + `Content-Length`, no body), a `Range`
+request (`206` slice), and otherwise the full `200`. Pass `etag` / `origin` as
+`""` to skip the conditional / CORS parts. Single-range only.
 
 ## WebSocket — single client
 
