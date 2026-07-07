@@ -1,6 +1,6 @@
 [package]
 name = "web"
-version = "0.2.3"
+version = "0.3.0"
 loft = ">=0.8"
 repository = "loft-libs-net"
 

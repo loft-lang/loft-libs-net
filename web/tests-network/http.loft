@@ -46,3 +46,32 @@ fn test_post_with_headers() {
   r = web::http_post_h("https://httpbin.org/post", "test-data", headers);
   assert(r.ok(), "POST+headers status={r.status}");
 }
+
+// --- #517 data-access stack: size, range, headers, binary-safe bodies ---
+
+fn test_response_headers() {
+  r = web::http_get("https://httpbin.org/get");
+  assert(r.ok(), "GET status={r.status}");
+  assert(r.headers.len() > 0, "response exposes headers, got {r.headers.len()}");
+}
+
+fn test_size() {
+  // /bytes/N reports Content-Length N.
+  n = web::http_size("https://httpbin.org/bytes/2048");
+  assert(n == 2048, "http_size == 2048, got {n}");
+}
+
+fn test_range() {
+  // /range/N honours Range: bytes= requests → 206 with just the slice.
+  r = web::http_get_range("https://httpbin.org/range/4096", 0, 100);
+  assert(r.status == 206, "range status 206, got {r.status}");
+  assert(r.body.len() == 100, "range returns exactly 100 bytes, got {r.body.len()}");
+}
+
+fn test_binary_body_preserves_bytes() {
+  // /bytes/N is random data that routinely includes NUL bytes; a binary-safe
+  // body must carry all N verbatim (a text body would truncate at the first NUL).
+  r = web::http_get("https://httpbin.org/bytes/256");
+  assert(r.status == 200, "bytes status 200, got {r.status}");
+  assert(r.body.len() == 256, "256 raw bytes preserved (binary-safe), got {r.body.len()}");
+}
