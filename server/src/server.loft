@@ -214,10 +214,10 @@ pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean {
     self.respond_with_headers(416, "", bad);
     return true;
   }
-  off = ((bounds[0] ?? "") as integer) ?? -1;
+  off = ((bounds[0] ?? "") as integer?) ?? -1;
   lt = bounds[1] ?? "";
   last = -1;
-  if lt.len() == 0 { last = total - 1; } else { last = (lt as integer) ?? -1; }
+  if lt.len() == 0 { last = total - 1; } else { last = (lt as integer?) ?? -1; }
   if off < 0 || last < off || off >= total {
     self.respond_with_headers(416, "", bad);
     return true;
@@ -451,7 +451,7 @@ pub fn poll_event(self: Server) -> WsEvent {
       if i != null {
         // A non-numeric id prefix is as malformed as a missing ":" —
         // warn-and-drop below rather than masking it as id 0.
-        mid = raw[..i] as integer;
+        mid = raw[..i] as integer?;
         if mid != null {
           return WsEvent { connected: false, message: true, http: false,
                            cid: cid, msg_id: mid ?? 0,
