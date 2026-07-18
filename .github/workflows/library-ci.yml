@@ -37,7 +37,7 @@ jobs:
         # loft-libs-core  → arguments, random, crypto
         # loft-libs-net   → web, server, game_protocol
         # loft-libs-graphics → graphics, imaging, gridmesh, shapes
-        package: [web, server, game_protocol]
+        package: [web, server, game_protocol, ssh]
     steps:
       - uses: actions/checkout@v4
 

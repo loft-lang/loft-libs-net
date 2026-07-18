@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Gate test: connecting to a closed port must fail (not panic, not hang), and
+// the library must load + call through the native FFI on both the interpreter
+// and --native.  No sshd or credentials required.
+use ssh;
+
+fn main() {
+  s = ssh::connect("127.0.0.1", 1);
+  assert(!s.ok());
+  // A failed session's operations must be safe no-ops.
+  assert(!s.login("u", "p"));
+  assert(!s.is_open());
+  s.close();
+  println("ssh connect_fail: PASS");
+}

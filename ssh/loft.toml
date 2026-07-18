@@ -1,0 +1,20 @@
+[package]
+name = "ssh"
+version = "0.1.0"
+loft = ">=0.8"
+repository = "loft-libs-net"
+
+[library]
+entry = "src/ssh.loft"
+native = "loft_ssh"
+
+[native]
+crate = "loft-ssh"
+
+# Native-only: SSH needs real TCP sockets, so this library ships the
+# interpreter + `--native` targets and deliberately does NOT declare a
+# `[wasm.bridge]` (no `--html`) — a browser has no raw socket. `--native-wasm`
+# (wasip2) is likewise out of scope: russh/tokio do not build against wasip2.
+#
+# Plan-74: native symbols are declared by co-located `#native` annotations in
+# `src/ssh.loft` (scanned by `loft-ffi-build`) — no `[native.functions]` table.

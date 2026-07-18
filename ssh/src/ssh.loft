@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// --- SSH client ---
+// A blocking / polling SSH client for driving an interactive remote shell —
+// e.g. attaching `tmux` from a terminal app.  Password authentication only; the
+// password is used for the handshake and never stored.  Native-only: SSH needs
+// real TCP sockets, so this library does not ship the browser (`--html`) target.
+//
+// Typical use:
+//   s = ssh::connect(host, 42022);
+//   if s.ok() && s.login(user, password) && s.open_shell("xterm-256color", 80, 24) {
+//     s.send("tmux attach\n");
+//     while s.is_open() {
+//       out = s.recv();                 // non-blocking; "" when idle
+//       for i in 0..len(out) { handle_byte(ssh::byte_at(i, out)); }
+//     }
+//   }
+
+// A live SSH session.  `handle >= 0` once the TCP connect + transport handshake
+// succeed; `< 0` means the connect failed.  Obtain one from `connect`.
+pub struct Session {
+  handle: integer
+}
+
+// --- internal native surface (implemented in native/src/lib.rs) ---
+
+fn ssh_connect(host: text, port: integer) -> integer;
+#native
+
+fn ssh_login(handle: integer, user: text, password: text) -> boolean;
+#native
+
+fn ssh_open_shell(handle: integer, term: text, cols: integer, rows: integer) -> boolean;
+#native
+
+fn ssh_send(handle: integer, data: text);
+#native
+
+fn ssh_recv(handle: integer) -> text;
+#native
+
+fn ssh_resize(handle: integer, cols: integer, rows: integer);
+#native
+
+fn ssh_is_open(handle: integer) -> boolean;
+#native
+
+fn ssh_close(handle: integer);
+#native
+
+// Read the byte at `idx` (0..len) of a `recv` result.  A terminal stream is raw
+// bytes, so read it byte-by-byte rather than as UTF-8.  Out of range returns -1.
+pub fn byte_at(idx: integer, data: text) -> integer;
+#native
+
+// --- public API ---
+
+// Open a TCP connection to `host:port` and run the SSH transport handshake.
+// Check `ok()` before authenticating.
+pub fn connect(host: text, port: integer) -> Session {
+  Session { handle: ssh_connect(host, port) }
+}
+
+// True when the session connected and completed the transport handshake.
+pub fn ok(self: Session) -> boolean {
+  self.handle >= 0
+}
+
+// Authenticate with a password.  Returns true on success.  The password is used
+// only for this handshake and is never stored by the library.
+pub fn login(self: Session, user: text, password: text) -> boolean {
+  self.handle >= 0 && ssh_login(self.handle, user, password)
+}
+
+// Request a pseudo-terminal of `cols` x `rows` (terminal type `term`, e.g.
+// "xterm-256color") and start the login shell.  Returns true on success.
+pub fn open_shell(self: Session, term: text, cols: integer, rows: integer) -> boolean {
+  self.handle >= 0 && ssh_open_shell(self.handle, term, cols, rows)
+}
+
+// Send bytes to the remote shell (keystrokes, escape sequences).  Binary-safe.
+pub fn send(self: Session, data: text) {
+  if self.handle >= 0 { ssh_send(self.handle, data); }
+}
+
+// Return the bytes the remote shell produced since the last call, or "" when
+// nothing is pending (non-blocking).  Binary-safe: iterate 0..len(result) and
+// read each byte with `byte_at`.
+pub fn recv(self: Session) -> text {
+  if self.handle < 0 { return ""; }
+  ssh_recv(self.handle)
+}
+
+// Tell the remote the terminal resized to `cols` x `rows` so it re-flows.  Call
+// after a zoom / rotate / window resize.
+pub fn resize(self: Session, cols: integer, rows: integer) {
+  if self.handle >= 0 { ssh_resize(self.handle, cols, rows); }
+}
+
+// True while the shell channel is open (the remote has not closed it).
+pub fn is_open(self: Session) -> boolean {
+  self.handle >= 0 && ssh_is_open(self.handle)
+}
+
+// Close the shell channel and disconnect.
+pub fn close(self: Session) {
+  if self.handle >= 0 { ssh_close(self.handle); }
+}
