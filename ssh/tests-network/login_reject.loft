@@ -1,0 +1,16 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Network test: against a local sshd (127.0.0.1:22), the connect + transport
+// handshake succeeds, and a bad password is rejected.  Verifies the connect +
+// auth path end-to-end without needing valid credentials.  Requires sshd on
+// 127.0.0.1:22 (skip elsewhere).
+use ssh;
+
+fn main() {
+  s = ssh::connect("127.0.0.1", 22);
+  assert(s.ok());
+  assert(!s.login("no_such_user_zzq", "definitely-not-the-password"));
+  s.close();
+  println("ssh login_reject: PASS");
+}
