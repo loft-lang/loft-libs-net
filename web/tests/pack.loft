@@ -12,7 +12,7 @@ fn test_pack_u8_roundtrip() {
   web::pack_u8(0x41);
   web::pack_u8(0x42);
   s = web::pack_take();
-  assert(s.len() == 2, "len 2, got {s.len()}");
+  assert(s.size() == 2, "2 bytes, got {s.size()}");
   assert(s[0] == 'A', "byte 0 = A");
   assert(s[1] == 'B', "byte 1 = B");
 }
@@ -21,7 +21,7 @@ fn test_pack_u16_le() {
   web::pack_reset();
   web::pack_u16_le(0x4142);
   s = web::pack_take();
-  assert(s.len() == 2, "len 2, got {s.len()}");
+  assert(s.size() == 2, "2 bytes, got {s.size()}");
   // little-endian: low byte first
   assert(s[0] == 'B', "byte 0 = B (0x42)");
   assert(s[1] == 'A', "byte 1 = A (0x41)");
@@ -31,7 +31,7 @@ fn test_pack_u32_le() {
   web::pack_reset();
   web::pack_u32_le(0x41424344);
   s = web::pack_take();
-  assert(s.len() == 4, "len 4, got {s.len()}");
+  assert(s.size() == 4, "4 bytes, got {s.size()}");
   assert(s[0] == 'D', "byte 0 = D");
   assert(s[3] == 'A', "byte 3 = A");
 }
@@ -42,6 +42,19 @@ fn test_pack_reset_clears() {
   s1 = web::pack_take();
   web::pack_reset();
   s2 = web::pack_take();
-  assert(s1.len() == 1, "first take len 1");
+  assert(s1.size() == 1, "first take 1 byte");
   assert(s2.len() == 0, "after reset, len 0, got {s2.len()}");
+}
+
+// @PLN110 regression: pack_take() returns a BINARY buffer, so its length is a BYTE
+// count — size(), not len() (the character count post-flip).  Pack the two bytes of a
+// UTF-8 "é" (0xC3 0xA9): they form ONE character but TWO bytes.  size()==2 is correct;
+// len() would read 1 and mis-measure the buffer.
+fn test_pack_byte_count_is_bytes_not_chars() {
+  web::pack_reset();
+  web::pack_u8(0xC3);
+  web::pack_u8(0xA9);
+  s = web::pack_take();
+  assert(s.size() == 2, "packed buffer is 2 BYTES, got {s.size()}");
+  assert(s.len() == 1, "...which is 1 UTF-8 character (proves size != len here)");
 }
