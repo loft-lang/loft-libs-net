@@ -135,7 +135,7 @@ fn content_range_total(headers: vector<text>) -> integer {
     if h.to_lowercase().starts_with("content-range:") {
       parts = h.split('/');
       if parts.len() >= 2 {
-        return parts[parts.len() - 1].trim() as integer ?? -1;
+        return (parts[parts.len() - 1] ?? "").trim() as integer ?? -1;
       }
     }
   }
@@ -360,12 +360,12 @@ pub fn byte_at(idx: integer, t: text) -> integer;
 //   }
 
 pub struct WsGroupEvent {
-  handle: integer not null,
+  handle: integer,
   message: text
 }
 
 pub struct WsGroup {
-  _dummy: integer not null   // no state on loft side; Rust owns the list
+  _dummy: integer   // no state on loft side; Rust owns the list
 }
 
 fn ws_group_clear_native();
