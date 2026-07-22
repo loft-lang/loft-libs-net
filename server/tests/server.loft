@@ -13,6 +13,27 @@ fn main() {
   // Verify Server struct creation
   srv = server::listen(18082);
   assert(srv.handle >= 0, "listen returned handle={srv.handle}");
+  assert(srv.bound(), "a successful listen reports bound()");
+
+  // A port that is already taken must be REPORTED, not papered over.  Before
+  // `bound()` / `try_listen` existed, `listen` handed back a Server whose handle was
+  // -1 and every call on it quietly did nothing — `run` spun forever on an empty
+  // event pump, so the process claimed to be up and served nobody.  It was invisible
+  // from outside too: a readiness probe that connects to the port reaches whoever DID
+  // win the bind and reports success.
+  //
+  // `listen` now halts on that, which cannot be asserted from inside the same process
+  // (it ends it); the exit-1 and the panic text are covered by the library's own
+  // manual check.  What IS assertable, and what a caller who wants to retry needs, is
+  // the recoverable half.
+  taken = server::try_listen(18082);
+  assert(!taken.bound(), "try_listen on a taken port must report bound()==false");
+  assert(taken.handle < 0, "an unbound server keeps a negative handle");
+
+  // A free port still works through the same door.
+  spare = server::try_listen(18083);
+  assert(spare.bound(), "try_listen on a free port must report bound()==true");
+  spare.close();
 
   // Close immediately — no accept needed
   srv.close();
