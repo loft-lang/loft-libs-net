@@ -27,6 +27,22 @@ server (the socket layer is native code; it is not available under
 request with one of the `respond*` methods, which sends the reply and closes
 the connection.
 
+**If the port cannot be taken, `listen` halts** with a message naming the port. That is
+deliberate: a server that did not get its port cannot do its job, and the previous
+behaviour — hand back a `Server` that accepts nothing — was invisible from inside the
+process (every call quietly did nothing; `run` spun forever on an empty event pump) and
+from outside it (a readiness probe that connects to the port reaches whoever *did* win
+the bind, and reports success).
+
+When losing the port is an outcome you mean to handle — retrying elsewhere, scanning a
+range — use `try_listen` and check `bound()`:
+
+```loft
+srv = server::try_listen(8080);
+if !srv.bound() { srv = server::try_listen(8081); }
+if !srv.bound() { panic("no free port"); }
+```
+
 ```loft
 use server;
 

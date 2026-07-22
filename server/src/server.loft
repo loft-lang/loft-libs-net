@@ -110,8 +110,37 @@ fn ws_close_native(handle: integer);
 
 // --- HTTP Server API ---
 
+// Bind a TCP listener on `port` and return the server.
+//
+// Failing to take the port is FATAL here, deliberately.  The native listener answers
+// -1 when the bind fails, and a `Server` built on -1 is indistinguishable from a
+// healthy one at every call site: `run` spins forever on an empty event pump, so the
+// process reports itself up and serves nobody.  Worse, that state is invisible from
+// OUTSIDE the process too — a readiness probe that connects to the port reaches
+// whoever DID win the bind and reports success — so the failure surfaces somewhere
+// else entirely, as a client that hangs or talks to a stranger's server.
+//
+// Use `try_listen` when losing the port is an outcome you mean to handle: retrying on
+// another port, or scanning a range.
 pub fn listen(port: integer) -> Server {
+  srv = try_listen(port);
+  if !srv.bound() {
+    panic("server::listen: cannot bind port {port} (already in use, or not permitted) — use try_listen() to handle this");
+  }
+  srv
+}
+
+// Like `listen`, but hands back an UNBOUND server instead of halting when the port
+// cannot be taken.  Check `bound()` before using it: every other method on an unbound
+// server does nothing, quietly.
+pub fn try_listen(port: integer) -> Server {
   Server { handle: tcp_listen(port) }
+}
+
+// True when this server actually owns its port.  Always true for a `listen()` result
+// (that halts otherwise) — it is the check that makes a `try_listen()` result usable.
+pub fn bound(self: Server) -> boolean {
+  self.handle >= 0
 }
 
 // Non-blocking variant of `next()`.  Returns null immediately if no
