@@ -79,7 +79,8 @@ pub unsafe extern "C" fn n_ssh_send(handle: i32, data_ptr: *const u8, data_len: 
 /// Drain and return the bytes received since the last call ("" when idle).
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ssh_recv(handle: i32) -> LoftStr {
+pub extern "C" fn n_ssh_recv(handle: i64) -> LoftStr {
+    let handle = handle as i32;
     let bytes = session::recv(handle);
     LAST_RECV.with(|b| {
         // SAFETY: the buffer is only ever read back through `n_byte_at` /
@@ -92,21 +93,24 @@ pub extern "C" fn n_ssh_recv(handle: i32) -> LoftStr {
 /// Notify the remote of a terminal resize.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ssh_resize(handle: i32, cols: i64, rows: i64) {
+pub extern "C" fn n_ssh_resize(handle: i64, cols: i64, rows: i64) {
+    let handle = handle as i32;
     session::resize(handle, cols as u32, rows as u32);
 }
 
 /// True while the shell channel is open.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ssh_is_open(handle: i32) -> bool {
+pub extern "C" fn n_ssh_is_open(handle: i64) -> bool {
+    let handle = handle as i32;
     session::is_open(handle)
 }
 
 /// Close the shell channel and disconnect.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ssh_close(handle: i32) {
+pub extern "C" fn n_ssh_close(handle: i64) {
+    let handle = handle as i32;
     session::close(handle);
 }
 

@@ -83,7 +83,7 @@ pub unsafe extern "C" fn n_http_do(
     body_len: usize,
     headers_ptr: *const u8,
     headers_len: usize,
-) -> i32 {
+) -> i64 {
     let method = unsafe { loft_ffi::text(method_ptr, method_len) };
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
     let body = unsafe { loft_ffi::text_opt(body_ptr, body_len) };
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn n_http_do(
         .collect::<Vec<_>>()
         .join("\n");
     LAST_HEADERS.with(|h| *h.borrow_mut() = headers_joined);
-    status
+    i64::from(status)
 }
 
 /// Return the body from the last HTTP request (raw bytes, NUL-preserving).
@@ -152,9 +152,13 @@ thread_local! {
 /// next send/recv will trigger a reconnect attempt subject to backoff.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i32 {
+// `i64` on the C boundary: the loft declaration types this `integer`, and loft emits
+// the extern from the DECLARATION, so a narrower Rust return leaves the upper half of
+// the register undefined and loft reads garbage — visibly, for negatives, on --native
+// only.  Narrow inside the body instead.
+pub unsafe extern "C" fn n_ws_connect(url_ptr: *const u8, url_len: usize) -> i64 {
     let url = unsafe { loft_ffi::text(url_ptr, url_len) };
-    ws_client::connect(url)
+    i64::from(ws_client::connect(url))
 }
 
 /// Send a text message on a WebSocket.  Returns true on success, false if
@@ -197,7 +201,8 @@ pub unsafe extern "C" fn n_ws_client_send_binary(
 /// empty or the connection is currently down.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_recv(handle: i32) -> bool {
+pub extern "C" fn n_ws_client_recv(handle: i64) -> bool {
+    let handle = handle as i32;
     ws_client::recv(handle)
 }
 
@@ -219,14 +224,19 @@ pub extern "C" fn n_ws_client_message() -> LoftStr {
 /// binary blob.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_opcode() -> u8 {
-    ws_client::last_opcode()
+// `i64` on the C boundary: the loft declaration types this `integer`, and loft emits
+// the extern from the DECLARATION, so a narrower Rust return leaves the upper half of
+// the register undefined and loft reads garbage — visibly, for negatives, on --native
+// only.  Narrow inside the body instead.
+pub extern "C" fn n_ws_client_opcode() -> i64 {
+    i64::from(ws_client::last_opcode())
 }
 
 /// Close a WebSocket session permanently (no reconnect).
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_client_close(handle: i32) {
+pub extern "C" fn n_ws_client_close(handle: i64) {
+    let handle = handle as i32;
     ws_client::close(handle);
 }
 
@@ -237,7 +247,8 @@ pub extern "C" fn n_ws_client_close(handle: i32) {
 /// observable overlap).  Negative / zero values are no-ops.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_sleep_ms(ms: i32) {
+pub extern "C" fn n_sleep_ms(ms: i64) {
+    let ms = ms as i32;
     if ms <= 0 {
         return;
     }
@@ -275,14 +286,16 @@ pub extern "C" fn n_pack_reset() {
 /// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u8(b: i32) {
+pub extern "C" fn n_pack_u8(b: i64) {
+    let b = b as i32;
     PACK_BUF.with(|buf| buf.borrow_mut().push((b & 0xff) as u8));
 }
 
 /// Append a 2-byte little-endian unsigned value to the pack buffer.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u16_le(v: i32) {
+pub extern "C" fn n_pack_u16_le(v: i64) {
+    let v = v as i32;
     PACK_BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let v = (v & 0xffff) as u16;
@@ -295,7 +308,8 @@ pub extern "C" fn n_pack_u16_le(v: i32) {
 /// pattern across the sign boundary.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_pack_u32_le(v: i32) {
+pub extern "C" fn n_pack_u32_le(v: i64) {
+    let v = v as i32;
     PACK_BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         let v = v as u32;
@@ -334,11 +348,15 @@ pub extern "C" fn n_pack_take() -> LoftStr {
 /// `text_ptr` / `text_len` must describe a valid byte slice.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_byte_at(idx: i32, text_ptr: *const u8, text_len: usize) -> i32 {
+// `i64` on the C boundary: the loft declaration types this `integer`, and loft emits
+// the extern from the DECLARATION, so a narrower Rust return leaves the upper half of
+// the register undefined and loft reads garbage — visibly, for negatives, on --native
+// only.  Narrow inside the body instead.
+pub unsafe extern "C" fn n_byte_at(idx: i64, text_ptr: *const u8, text_len: usize) -> i64 {
     if idx < 0 || (idx as usize) >= text_len {
         return -1;
     }
-    unsafe { i32::from(*text_ptr.add(idx as usize)) }
+    unsafe { i64::from(*text_ptr.add(idx as usize)) }
 }
 
 // ── WsGroup: multiplexed client-side receiver ───────────────────────────
@@ -364,7 +382,8 @@ pub extern "C" fn n_ws_group_clear() {
 /// Add a handle to the group.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_group_add(handle: i32) {
+pub extern "C" fn n_ws_group_add(handle: i64) {
+    let handle = handle as i32;
     WS_GROUP.with(|g| g.borrow_mut().push(handle));
 }
 
@@ -372,7 +391,7 @@ pub extern "C" fn n_ws_group_add(handle: i32) {
 /// (read it with n_ws_client_message), or -1 if none are ready.
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_group_poll() -> i32 {
+pub extern "C" fn n_ws_group_poll() -> i64 {
     let (handles, offset) = WS_GROUP.with(|g| {
         let g = g.borrow();
         (g.clone(), WS_GROUP_OFFSET.with(|o| o.get()))
@@ -385,7 +404,7 @@ pub extern "C" fn n_ws_group_poll() -> i32 {
             WS_GROUP_OFFSET.with(|o| o.set((pos + 1) % handles.len()));
         }
     }
-    result
+    i64::from(result)
 }
 
 // @PLAN12 phase 2 final step (2026-05-24): the `loft_ffi::loft_register!`

@@ -494,8 +494,12 @@ pub extern "C" fn n_ws_message() -> LoftStr {
 /// Get the last received WebSocket opcode (1=text, 2=binary, 8=close, 9=ping, 10=pong).
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn n_ws_opcode() -> u8 {
-    WS_LAST_OPCODE.with(|o| *o.borrow())
+// `i64` on the C boundary: the loft declaration types this `integer`, and loft emits
+// the extern from the DECLARATION, so a narrower Rust return leaves the upper half of
+// the register undefined and loft reads garbage — visibly, for negatives, on --native
+// only.  Narrow inside the body instead.
+pub extern "C" fn n_ws_opcode() -> i64 {
+    WS_LAST_OPCODE.with(|o| i64::from(*o.borrow()))
 }
 
 /// Send a text WebSocket message.
