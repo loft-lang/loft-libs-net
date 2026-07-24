@@ -16,7 +16,122 @@ mod native_impl {
     use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::net::TcpStream;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    // ── The stream: plain TCP (ws://) or TLS over TCP (wss://) ──────────
+    //
+    // Every frame / handshake function is written over `Read + Write`, so it does not care which
+    // this is. The enum keeps the timeout and non-blocking controls the polling loop needs, by
+    // delegating to the underlying `TcpStream` in both arms (for the TLS arm, rustls exposes it as
+    // `sock`). The client sets a 7ms read timeout for its non-blocking poll; that lives on the TCP
+    // socket beneath the TLS layer, so it works identically for both.
+    enum WsStream {
+        Plain(TcpStream),
+        Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    }
+
+    impl WsStream {
+        fn sock(&self) -> &TcpStream {
+            match self {
+                WsStream::Plain(s) => s,
+                WsStream::Tls(t) => &t.sock,
+            }
+        }
+        fn set_read_timeout(&self, d: Option<Duration>) -> std::io::Result<()> {
+            self.sock().set_read_timeout(d)
+        }
+        fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+            self.sock().set_nonblocking(on)
+        }
+    }
+
+    impl Read for WsStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self {
+                WsStream::Plain(s) => s.read(buf),
+                WsStream::Tls(t) => t.read(buf),
+            }
+        }
+    }
+    impl Write for WsStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            match self {
+                WsStream::Plain(s) => s.write(buf),
+                WsStream::Tls(t) => t.write(buf),
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            match self {
+                WsStream::Plain(s) => s.flush(),
+                WsStream::Tls(t) => t.flush(),
+            }
+        }
+    }
+
+    // ── TLS config ─────────────────────────────────────────────────────
+    //
+    // Certificate validation is ON by default, against the Mozilla roots (webpki-roots). The one
+    // opt-out is `LOFT_WS_INSECURE_SKIP_VERIFY=1`, for a self-signed dev endpoint — it installs a
+    // verifier that accepts any certificate. It is intentionally an env var, not a URL option, so
+    // it cannot be baked into a deployed config by accident, and it is loud in the process
+    // environment where an operator can see it. Default is refuse-a-bad-cert.
+    fn tls_config() -> rustls::ClientConfig {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        if std::env::var("LOFT_WS_INSECURE_SKIP_VERIFY").as_deref() == Ok("1") {
+            return rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .expect("ring provider supports the default protocol versions")
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerify))
+                .with_no_client_auth();
+        }
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("ring provider supports the default protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    }
+
+    // The insecure-dev verifier. Present only to serve the explicit env opt-out above; it accepts
+    // every certificate, so it must never be reachable without LOFT_WS_INSECURE_SKIP_VERIFY set.
+    #[derive(Debug)]
+    struct NoVerify;
+    impl rustls::client::danger::ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls_pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+            _server_name: &rustls_pki_types::ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: rustls_pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .supported_schemes()
+        }
+    }
 
     /// One WebSocket "session".  Owns the (possibly absent) live TCP
     /// stream, the URL needed to reconnect, the last reconnect attempt
@@ -24,7 +139,7 @@ mod native_impl {
     /// stays alive across reconnect attempts; only `close()` destroys it.
     struct Conn {
         url: String,
-        stream: Option<TcpStream>,
+        stream: Option<WsStream>,
         inbox: VecDeque<String>,
         last_attempt: Instant,
         backoff_ms: u64,
@@ -149,24 +264,32 @@ mod native_impl {
         out
     }
 
-    // ── URL parser: ws://host:port/path  (no TLS, no auth) ─────────────
-
-    fn parse_ws_url(url: &str) -> Option<(String, u16, String)> {
-        let rest = url.strip_prefix("ws://")?;
+    // ── URL parser: ws://host:port/path  or  wss://host:port/path ──────
+    //
+    // Returns (tls, host, port, path). The default port follows the scheme — 80 for ws://, 443 for
+    // wss:// — matching the browser `WebSocket`, so the same URL a page uses works native too.
+    fn parse_ws_url(url: &str) -> Option<(bool, String, u16, String)> {
+        let (tls, rest, default_port) = if let Some(r) = url.strip_prefix("wss://") {
+            (true, r, 443u16)
+        } else if let Some(r) = url.strip_prefix("ws://") {
+            (false, r, 80u16)
+        } else {
+            return None;
+        };
         let (authority, path) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
         };
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) => (h.to_string(), p.parse().ok()?),
-            None => (authority.to_string(), 80u16),
+            None => (authority.to_string(), default_port),
         };
-        Some((host, port, path.to_string()))
+        Some((tls, host, port, path.to_string()))
     }
 
     // ── Handshake (client side) ────────────────────────────────────────
 
-    fn do_handshake(stream: &mut TcpStream, host: &str, port: u16, path: &str) -> bool {
+    fn do_handshake<S: Read + Write>(stream: &mut S, host: &str, port: u16, path: &str) -> bool {
         let nonce = base64(&pseudo_random_bytes(16));
         let req = format!(
             "GET {path} HTTP/1.1\r\n\
@@ -262,7 +385,7 @@ mod native_impl {
     pub const OP_PING: u8 = 0x09;
     pub const OP_PONG: u8 = 0x0A;
 
-    fn write_masked_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> bool {
+    fn write_masked_frame<S: Read + Write>(stream: &mut S, opcode: u8, payload: &[u8]) -> bool {
         let mut frame = Vec::with_capacity(payload.len() + 14);
         frame.push(0x80 | opcode); // FIN + opcode
         let len = payload.len();
@@ -284,7 +407,7 @@ mod native_impl {
         stream.write_all(&frame).is_ok()
     }
 
-    fn read_unmasked_frame(stream: &mut TcpStream) -> Option<(u8, Vec<u8>)> {
+    fn read_unmasked_frame<S: Read + Write>(stream: &mut S) -> Option<(u8, Vec<u8>)> {
         let mut header = [0u8; 2];
         stream.read_exact(&mut header).ok()?;
         let opcode = header[0] & 0x0F;
@@ -327,8 +450,8 @@ mod native_impl {
     /// Attempt to (re)open the TCP connection + WebSocket handshake.
     /// Returns Ok(stream) on success, Err(()) on any failure.  The caller
     /// is responsible for backoff bookkeeping.
-    fn try_open(url: &str) -> Result<TcpStream, ()> {
-        let (host, port, path) = parse_ws_url(url).ok_or(())?;
+    fn try_open(url: &str) -> Result<WsStream, ()> {
+        let (tls, host, port, path) = parse_ws_url(url).ok_or(())?;
         let addr = format!("{host}:{port}");
         // Try every resolved socket address (IPv4 + IPv6) in turn.  On
         // a typical Linux box `localhost` resolves to `::1` first, but
@@ -342,22 +465,53 @@ mod native_impl {
         }
         let mut last_err = None;
         for sa in &addrs {
-            match TcpStream::connect_timeout(sa, Duration::from_secs(2)) {
-                Ok(s) => {
-                    let mut stream = s;
-                    if do_handshake(&mut stream, &host, port, &path) {
-                        let _ = stream.set_read_timeout(Some(Duration::from_millis(7)));
-                        return Ok(stream);
-                    }
-                    last_err = Some("handshake");
-                }
+            let tcp = match TcpStream::connect_timeout(sa, Duration::from_secs(2)) {
+                Ok(s) => s,
                 Err(_) => {
                     last_err = Some("connect");
+                    continue;
                 }
+            };
+            // Wrap in TLS BEFORE the WS handshake for wss://. Both handshakes run in the socket's
+            // default blocking mode; the 7ms poll timeout is set only afterwards, on success.
+            let mut stream = if tls {
+                match tls_wrap(tcp, &host) {
+                    Some(s) => s,
+                    None => {
+                        // A TLS failure (bad certificate, wrong host, handshake refused) is a hard
+                        // stop for THIS address, not a silent fallback to plaintext — a wss:// URL
+                        // that quietly spoke ws:// would defeat the point.
+                        last_err = Some("tls");
+                        continue;
+                    }
+                }
+            } else {
+                WsStream::Plain(tcp)
+            };
+            if do_handshake(&mut stream, &host, port, &path) {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(7)));
+                return Ok(stream);
             }
+            last_err = Some("handshake");
         }
         let _ = last_err;
         Err(())
+    }
+
+    // Complete a TLS handshake over an established TCP stream. Returns None on any TLS failure
+    // (certificate rejected under the default verifier, unparseable host name, handshake error) —
+    // the caller treats that as a refused connection, never a downgrade to plaintext.
+    fn tls_wrap(tcp: TcpStream, host: &str) -> Option<WsStream> {
+        let server_name = rustls_pki_types::ServerName::try_from(host.to_string()).ok()?;
+        let config = Arc::new(tls_config());
+        let mut conn = rustls::ClientConnection::new(config, server_name).ok()?;
+        let mut sock = tcp;
+        // Drive the handshake to completion synchronously (blocking socket) so a certificate
+        // rejection surfaces HERE as a connection failure, not later as a mid-stream read error.
+        if conn.complete_io(&mut sock).is_err() {
+            return None;
+        }
+        Some(WsStream::Tls(Box::new(rustls::StreamOwned::new(conn, sock))))
     }
 
     use std::net::ToSocketAddrs;
@@ -609,6 +763,170 @@ mod native_impl {
                 *slot = None;
             }
         });
+    }
+
+    // ── L2 verification: the native client speaks wss:// and validates certificates ────────────
+    #[cfg(test)]
+    mod tls_tests {
+        use super::*;
+        use std::net::TcpListener;
+        use std::thread;
+
+        // A self-signed cert + PKCS#8 key for CN=localhost (SAN 127.0.0.1). Self-signed on
+        // PURPOSE: it is rejected by the default verifier (so the negative case is real) and
+        // accepted only under the explicit dev opt-out (so the positive case exercises the whole
+        // TLS + WS path). Regenerate with `openssl req -x509 -newkey ec -pkeyopt
+        // ec_paramgen_curve:prime256v1 -nodes -subj /CN=localhost -addext
+        // subjectAltName=IP:127.0.0.1` then DER-encode.
+        const CERT: &[u8] = include_bytes!("../tests/fixtures/cert.der");
+        const KEY: &[u8] = include_bytes!("../tests/fixtures/key.der");
+
+        // A minimal TLS + WebSocket echo server: one connection, one WS upgrade, echo one text
+        // frame. Reuses the module's own `sha1` / `base64` so the accept token is computed the
+        // same way both sides of a real connection would.
+        fn spawn_echo() -> u16 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            thread::spawn(move || {
+                let cert = rustls_pki_types::CertificateDer::from(CERT.to_vec());
+                let key = rustls_pki_types::PrivateKeyDer::Pkcs8(
+                    rustls_pki_types::PrivatePkcs8KeyDer::from(KEY.to_vec()),
+                );
+                let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                    rustls::crypto::ring::default_provider(),
+                ))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap();
+                let (tcp, _) = match listener.accept() {
+                    Ok(x) => x,
+                    Err(_) => return,
+                };
+                let conn = match rustls::ServerConnection::new(Arc::new(config)) {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                let mut tls = rustls::StreamOwned::new(conn, tcp);
+                // read the upgrade request to \r\n\r\n, capture Sec-WebSocket-Key
+                let mut hdr = Vec::new();
+                let mut b = [0u8; 1];
+                loop {
+                    match tls.read(&mut b) {
+                        Ok(0) | Err(_) => return,
+                        Ok(_) => {}
+                    }
+                    hdr.push(b[0]);
+                    if hdr.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                    if hdr.len() > 16 * 1024 {
+                        return;
+                    }
+                }
+                let text = String::from_utf8_lossy(&hdr);
+                let key = text
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        if k.trim().eq_ignore_ascii_case("sec-websocket-key") {
+                            Some(v.trim().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                let mut accept_in = key;
+                accept_in.push_str("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+                let accept = base64(&sha1(accept_in.as_bytes()));
+                let resp = format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\
+                     Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+                );
+                if tls.write_all(resp.as_bytes()).is_err() {
+                    return;
+                }
+                // read ONE masked frame from the client, echo it back UNMASKED
+                let mut h = [0u8; 2];
+                if tls.read_exact(&mut h).is_err() {
+                    return;
+                }
+                let opcode = h[0] & 0x0F;
+                let masked = (h[1] & 0x80) != 0;
+                let mut len = (h[1] & 0x7F) as usize;
+                if len == 126 {
+                    let mut e = [0u8; 2];
+                    if tls.read_exact(&mut e).is_err() {
+                        return;
+                    }
+                    len = u16::from_be_bytes(e) as usize;
+                }
+                let mut mask = [0u8; 4];
+                if masked && tls.read_exact(&mut mask).is_err() {
+                    return;
+                }
+                let mut payload = vec![0u8; len];
+                if tls.read_exact(&mut payload).is_err() {
+                    return;
+                }
+                if masked {
+                    for (i, p) in payload.iter_mut().enumerate() {
+                        *p ^= mask[i % 4];
+                    }
+                }
+                let mut out = vec![0x80 | opcode];
+                out.push(len as u8); // test payloads stay < 126
+                out.extend_from_slice(&payload);
+                let _ = tls.write_all(&out);
+                let _ = tls.flush();
+                thread::sleep(Duration::from_millis(300)); // let the client read before we drop
+            });
+            port
+        }
+
+        #[test]
+        fn parse_wss_scheme_and_default_port() {
+            assert_eq!(
+                parse_ws_url("wss://h.example/p"),
+                Some((true, "h.example".to_string(), 443, "/p".to_string()))
+            );
+            assert_eq!(
+                parse_ws_url("ws://h.example/p"),
+                Some((false, "h.example".to_string(), 80, "/p".to_string()))
+            );
+            assert_eq!(
+                parse_ws_url("wss://h.example:9000/p"),
+                Some((true, "h.example".to_string(), 9000, "/p".to_string()))
+            );
+            assert_eq!(parse_ws_url("http://x"), None);
+        }
+
+        // Both TLS-policy cases in ONE test: they toggle the same process-global env var, so they
+        // must be sequential, not two parallel tests racing on it.
+        #[test]
+        fn wss_round_trip_and_cert_policy() {
+            // (a) dev opt-out ON: a wss:// connection to a self-signed endpoint completes TLS + the
+            //     WS handshake and round-trips a frame — L2.1.
+            let port = spawn_echo();
+            unsafe { std::env::set_var("LOFT_WS_INSECURE_SKIP_VERIFY", "1") };
+            let mut stream = try_open(&format!("wss://127.0.0.1:{port}/"))
+                .expect("wss connects to a self-signed endpoint with the dev opt-out");
+            assert!(write_masked_frame(&mut stream, OP_TEXT, b"ping-over-tls"));
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+            let got = read_unmasked_frame(&mut stream).expect("an echo frame comes back over TLS");
+            assert_eq!(got.0, OP_TEXT);
+            assert_eq!(got.1, b"ping-over-tls");
+
+            // (b) dev opt-out OFF (the default): the SAME self-signed endpoint is REFUSED — a bad
+            //     certificate fails the connection — L2.2.
+            let port2 = spawn_echo();
+            unsafe { std::env::remove_var("LOFT_WS_INSECURE_SKIP_VERIFY") };
+            assert!(
+                try_open(&format!("wss://127.0.0.1:{port2}/")).is_err(),
+                "a self-signed cert is refused under the default verifier"
+            );
+        }
     }
 }
 
