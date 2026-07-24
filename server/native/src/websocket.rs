@@ -5,7 +5,6 @@
 //! No external dependencies — pure std.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
 
 /// WebSocket opcodes.
 pub const OP_TEXT: u8 = 0x01;
@@ -143,7 +142,7 @@ pub fn ws_accept_key(client_key: &str) -> String {
 
 /// Perform the WebSocket upgrade handshake on an already-accepted TCP stream.
 /// Returns true if the upgrade succeeded.
-pub fn ws_upgrade(stream: &mut TcpStream, headers: &str) -> bool {
+pub fn ws_upgrade<S: Read + Write>(stream: &mut S, headers: &str) -> bool {
     // Find Sec-WebSocket-Key in headers
     let key = headers.lines().find_map(|line| {
         let (k, v) = line.split_once(':')?;
@@ -173,7 +172,7 @@ pub fn ws_upgrade(stream: &mut TcpStream, headers: &str) -> bool {
 /// single-client `n_ws_recv` which collapses no-data, peer-close,
 /// and read-error into a single false return.  Multi-client
 /// callers should use `ws_read_frame_detailed` instead.
-pub fn ws_read_frame(stream: &mut TcpStream) -> Option<WsFrame> {
+pub fn ws_read_frame<S: Read + Write>(stream: &mut S) -> Option<WsFrame> {
     match ws_read_frame_detailed(stream) {
         ReadOutcome::Frame(f) => Some(f),
         ReadOutcome::NoData | ReadOutcome::Closed => None,
@@ -190,7 +189,7 @@ pub fn ws_read_frame(stream: &mut TcpStream) -> Option<WsFrame> {
 /// - `Frame` — a complete frame was read.
 /// - `Closed` — partial read, EOF, or any other I/O error.
 ///   Treated as "peer is gone".
-pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
+pub fn ws_read_frame_detailed<S: Read + Write>(stream: &mut S) -> ReadOutcome {
     let mut header = [0u8; 2];
     if let Err(e) = stream.read_exact(&mut header) {
         return match e.kind() {
@@ -253,7 +252,7 @@ pub fn ws_read_frame_detailed(stream: &mut TcpStream) -> ReadOutcome {
 }
 
 /// Write a WebSocket frame to the stream (server → client, unmasked).
-pub fn ws_write_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> bool {
+pub fn ws_write_frame<S: Read + Write>(stream: &mut S, opcode: u8, payload: &[u8]) -> bool {
     let mut frame = Vec::new();
     frame.push(0x80 | opcode); // FIN + opcode
 

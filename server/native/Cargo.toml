@@ -10,6 +10,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 loft-ffi = "0.1"
 loft-ffi-macros = "0.1"
+# TLS termination (wss:// / https://). rustls 0.23 with the ring provider — no C toolchain.
+# rustls-pemfile parses the PEM cert chain + key a self-hoster already has (e.g. from ACME).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1"
+rustls-pemfile = "2"
 
 [build-dependencies]
 loft-ffi-build = "0.2"
