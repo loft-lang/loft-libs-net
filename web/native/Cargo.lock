@@ -231,7 +231,10 @@ dependencies = [
  "loft-ffi",
  "loft-ffi-build",
  "loft-ffi-macros",
+ "rustls",
+ "rustls-pki-types",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

@@ -225,7 +225,15 @@ fn ws_client_close_native(handle: integer);
 // malformed; transient connection failures (server not yet up,
 // network blip) are absorbed by the auto-reconnect loop in the Rust
 // layer, so this call always returns a usable handle for any
-// well-formed `ws://...` URL.
+// well-formed `ws://...` or `wss://...` URL.
+//
+// `wss://` (TLS) works on BOTH targets: the browser uses the platform
+// WebSocket (which has always spoken wss), and since web 0.3.2 the
+// native client dials TLS through rustls with certificate validation
+// ON by default (default port 443).  For a self-signed dev endpoint,
+// set `LOFT_WS_INSECURE_SKIP_VERIFY=1` in the native process — an
+// explicit opt-out, never a URL option, so it cannot be baked into a
+// deployed config by accident.
 pub fn ws_handler(url: text) -> WsHandler {
   id = ws_client_connect_native(url);
   if id < 0 { return null; }
