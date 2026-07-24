@@ -35,6 +35,15 @@ pub struct Request {
 fn tcp_listen(port: integer) -> integer;
 #native
 
+fn tcp_listen_on(addr: text, port: integer) -> integer;
+#native
+
+fn tcp_listen_tls(port: integer, cert: text, key: text) -> integer;
+#native
+
+fn tcp_listen_tls_on(addr: text, port: integer, cert: text, key: text) -> integer;
+#native
+
 fn tcp_accept(handle: integer) -> boolean;
 #native
 
@@ -135,6 +144,46 @@ pub fn listen(port: integer) -> Server {
 // server does nothing, quietly.
 pub fn try_listen(port: integer) -> Server {
   Server { handle: tcp_listen(port) }
+}
+
+// Bind on a chosen address rather than the wildcard `0.0.0.0` that plain `listen` uses.
+// `"127.0.0.1"` restricts the server to loopback — unreachable from the network — which is
+// the safe default a machine sitting behind a reverse proxy or an SSH tunnel wants, and the
+// one `listen` deliberately does NOT give (it binds every interface). An empty `addr` means
+// `0.0.0.0`. Halts if the bind fails; `try_listen_on` hands back an unbound server instead.
+pub fn listen_on(addr: text, port: integer) -> Server {
+  srv = try_listen_on(addr, port);
+  if !srv.bound() {
+    panic("server::listen_on: cannot bind {addr}:{port} (in use, or not permitted) — use try_listen_on() to handle this");
+  }
+  srv
+}
+pub fn try_listen_on(addr: text, port: integer) -> Server {
+  Server { handle: tcp_listen_on(addr, port) }
+}
+
+// Serve TLS (https:// / wss://). `cert` is a PEM certificate CHAIN (leaf first, then any
+// intermediates — what an ACME client writes as fullchain.pem); `key` is the PEM private
+// key. Both are the file CONTENTS, not paths, so the caller reads them however it likes
+// (`file(path).content()`), keeping this layer free of any filesystem policy. The op surface
+// is identical to a plaintext server — accept, respond, WebSocket upgrade all work the same,
+// just over TLS. Halts if the certificate/key is unusable or the bind fails (never a silent
+// fallback to cleartext — a TLS server that quietly served http would be the worst surprise).
+pub fn listen_tls(port: integer, cert: text, key: text) -> Server {
+  srv = try_listen_tls(port, cert, key);
+  if !srv.bound() {
+    panic("server::listen_tls: cannot bind port {port} over TLS (bad cert/key, port in use, or not permitted) — use try_listen_tls() to handle this");
+  }
+  srv
+}
+pub fn try_listen_tls(port: integer, cert: text, key: text) -> Server {
+  Server { handle: tcp_listen_tls(port, cert, key) }
+}
+
+// TLS on a chosen bind address — `listen_tls` + `listen_on` combined. An empty `addr` means
+// `0.0.0.0`.
+pub fn try_listen_tls_on(addr: text, port: integer, cert: text, key: text) -> Server {
+  Server { handle: tcp_listen_tls_on(addr, port, cert, key) }
 }
 
 // True when this server actually owns its port.  Always true for a `listen()` result

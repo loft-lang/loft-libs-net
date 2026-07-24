@@ -9,12 +9,163 @@ mod websocket;
 use loft_ffi::LoftStr;
 use loft_ffi_macros::loft_native;
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+
+// ── The accepted connection: plain TCP or TLS over TCP ─────────────────────
+//
+// Everything downstream (parse_request, respond, the websocket framing) is written over
+// `Read + Write`, so it does not care which this is. The one place that DID care is the
+// fast-idle poll, which used `TcpStream::peek` to check for a pending WS frame without
+// consuming it. rustls cannot peek — you cannot look at plaintext without decrypting, which
+// consumes the record — so the TLS arm keeps a small read-ahead buffer: `probe_header`
+// reads up to two bytes into it non-blocking, and `Read` drains that buffer before the
+// stream. From the caller's side a probe is still non-destructive; the bytes come back on
+// the next read. This preserves the "12 Hz collapse" fast-idle fix for TLS too.
+enum ServerStreamInner {
+    Plain(TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
+}
+
+struct ServerStream {
+    inner: ServerStreamInner,
+    peekbuf: VecDeque<u8>,
+}
+
+/// The result of a non-destructive 2-byte probe of a WS connection.
+enum Probe {
+    Closed,     // orderly EOF
+    Pending,    // fewer than 2 bytes available right now (idle, or a header still arriving)
+    Ready,      // at least 2 bytes are available — a frame is waiting
+}
+
+impl ServerStream {
+    fn plain(s: TcpStream) -> Self {
+        ServerStream { inner: ServerStreamInner::Plain(s), peekbuf: VecDeque::new() }
+    }
+    fn tls(s: rustls::StreamOwned<rustls::ServerConnection, TcpStream>) -> Self {
+        ServerStream { inner: ServerStreamInner::Tls(Box::new(s)), peekbuf: VecDeque::new() }
+    }
+    fn sock(&self) -> &TcpStream {
+        match &self.inner {
+            ServerStreamInner::Plain(s) => s,
+            ServerStreamInner::Tls(t) => &t.sock,
+        }
+    }
+    fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+        self.sock().set_nonblocking(on)
+    }
+    fn set_read_timeout(&self, d: Option<std::time::Duration>) -> std::io::Result<()> {
+        self.sock().set_read_timeout(d)
+    }
+
+    /// Non-destructively check whether a 2-byte WS header is pending, without blocking.
+    /// Plain uses `peek` (the kernel keeps the bytes); TLS reads-ahead into `peekbuf`, which
+    /// the next `read` drains first — so either way the bytes are still delivered.
+    fn probe_header(&mut self) -> Probe {
+        match &mut self.inner {
+            ServerStreamInner::Plain(s) => {
+                let _ = s.set_nonblocking(true);
+                let mut hdr = [0u8; 2];
+                let r = s.peek(&mut hdr);
+                let _ = s.set_nonblocking(false);
+                match r {
+                    Ok(0) => Probe::Closed,
+                    Ok(n) if n < 2 => Probe::Pending,
+                    Ok(_) => Probe::Ready,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        Probe::Pending
+                    }
+                    Err(_) => Probe::Closed,
+                }
+            }
+            ServerStreamInner::Tls(t) => {
+                if self.peekbuf.len() >= 2 {
+                    return Probe::Ready;
+                }
+                let _ = t.sock.set_nonblocking(true);
+                let mut buf = [0u8; 2];
+                let r = t.read(&mut buf);
+                let _ = t.sock.set_nonblocking(false);
+                match r {
+                    Ok(0) => {
+                        // 0 from rustls after some plaintext is still buffered means "no
+                        // plaintext this instant", not a close — only a real close if nothing
+                        // is buffered anywhere.
+                        if self.peekbuf.is_empty() { Probe::Closed } else { Probe::Ready }
+                    }
+                    Ok(n) => {
+                        self.peekbuf.extend(&buf[..n]);
+                        if self.peekbuf.len() >= 2 { Probe::Ready } else { Probe::Pending }
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        if self.peekbuf.len() >= 2 { Probe::Ready } else { Probe::Pending }
+                    }
+                    Err(_) => {
+                        if self.peekbuf.is_empty() { Probe::Closed } else { Probe::Ready }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Read for ServerStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // Drain any bytes a prior probe read ahead, before touching the stream.
+        if !self.peekbuf.is_empty() {
+            let mut n = 0;
+            while n < buf.len() {
+                match self.peekbuf.pop_front() {
+                    Some(b) => {
+                        buf[n] = b;
+                        n += 1;
+                    }
+                    None => break,
+                }
+            }
+            return Ok(n);
+        }
+        match &mut self.inner {
+            ServerStreamInner::Plain(s) => s.read(buf),
+            ServerStreamInner::Tls(t) => t.read(buf),
+        }
+    }
+}
+
+impl Write for ServerStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match &mut self.inner {
+            ServerStreamInner::Plain(s) => s.write(buf),
+            ServerStreamInner::Tls(t) => t.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match &mut self.inner {
+            ServerStreamInner::Plain(s) => s.flush(),
+            ServerStreamInner::Tls(t) => t.flush(),
+        }
+    }
+}
+
+/// A bound listener: the TCP socket plus, for a TLS listener, the shared server config used to
+/// wrap each accepted connection.
+struct Listener {
+    tcp: TcpListener,
+    tls: Option<Arc<rustls::ServerConfig>>,
+}
 
 thread_local! {
-    static LISTENERS: RefCell<Vec<Option<TcpListener>>> = const { RefCell::new(Vec::new()) };
-    static CURRENT_CONN: RefCell<Option<TcpStream>> = const { RefCell::new(None) };
+    static LISTENERS: RefCell<Vec<Option<Listener>>> = const { RefCell::new(Vec::new()) };
+    static CURRENT_CONN: RefCell<Option<ServerStream>> = const { RefCell::new(None) };
     static LAST_METHOD: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_PATH: RefCell<String> = const { RefCell::new(String::new()) };
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
@@ -27,7 +178,7 @@ thread_local! {
     static SLICE_BUF: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, String)> {
+fn parse_request<S: Read + Write>(stream: &mut S) -> Option<(String, String, String, String)> {
     // Read the header block BYTE-BY-BYTE.  We deliberately do NOT use
     // BufReader here: a custom client may send WebSocket frames
     // immediately after its `Upgrade: websocket` request without
@@ -111,25 +262,169 @@ fn parse_request(stream: &mut TcpStream) -> Option<(String, String, String, Stri
 // new export needs a narrow type, change the `#native` declaration in `server.loft`
 // too — the two sides are one contract.
 
-/// Bind a TCP listener on the given port. Returns handle (>= 0) or -1.
-#[loft_native]
-#[unsafe(no_mangle)]
-pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
-    let port = port as u32;
-    let addr = format!("0.0.0.0:{port}");
-    match TcpListener::bind(&addr) {
-        Ok(listener) => {
-            eprintln!("loft server listening on {addr}");
+/// Bind a listener at `addr:port` with an optional TLS config. The single home every listen
+/// variant routes through, so binding, the store, and the log line are written once.
+fn bind_listener(addr: &str, port: u32, tls: Option<Arc<rustls::ServerConfig>>) -> i64 {
+    let bind = format!("{addr}:{port}");
+    match TcpListener::bind(&bind) {
+        Ok(tcp) => {
+            let scheme = if tls.is_some() { "https/wss" } else { "http/ws" };
+            eprintln!("loft server listening on {bind} ({scheme})");
             LISTENERS.with(|l| {
                 let mut l = l.borrow_mut();
                 let idx = l.len();
-                l.push(Some(listener));
+                l.push(Some(Listener { tcp, tls }));
                 idx as i64
             })
         }
         Err(e) => {
-            eprintln!("loft_tcp_listen: cannot bind {addr}: {e}");
+            eprintln!("loft_tcp_listen: cannot bind {bind}: {e}");
             -1
+        }
+    }
+}
+
+/// Build a rustls server config from a PEM cert chain + PEM private key. Returns None on any
+/// parse failure (empty chain, unreadable key, no usable key) — the caller reports a bind
+/// failure, never a plaintext fallback: a listener asked for TLS that silently served cleartext
+/// would be the worst possible surprise.
+fn server_config_from_pem(cert_pem: &str, key_pem: &str) -> Option<Arc<rustls::ServerConfig>> {
+    let certs: Vec<rustls_pki_types::CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut cert_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+    if certs.is_empty() {
+        eprintln!("loft_tcp_listen_tls: no certificate found in the PEM cert chain");
+        return None;
+    }
+    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes()).ok()??;
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .ok()?
+    .with_no_client_auth()
+    .with_single_cert(certs, key)
+    .map_err(|e| eprintln!("loft_tcp_listen_tls: bad certificate/key pair: {e}"))
+    .ok()?;
+    Some(Arc::new(config))
+}
+
+/// Bind a plaintext TCP listener on `0.0.0.0:port`. Returns handle (>= 0) or -1.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
+    bind_listener("0.0.0.0", port as u32, None)
+}
+
+/// Bind a plaintext TCP listener on a caller-chosen address (`addr:port`) — L3.2. `0.0.0.0`
+/// accepts from the network; `127.0.0.1` restricts to loopback, which is the safe default the
+/// reverse-proxy notes warned `n_tcp_listen` did NOT give. Returns handle (>= 0) or -1.
+///
+/// # Safety
+/// `addr_ptr`/`addr_len` must describe a valid UTF-8 slice or be `(NULL, 0)`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_listen_on(addr_ptr: *const u8, addr_len: usize, port: i64) -> i64 {
+    let addr = unsafe { loft_ffi::text_opt(addr_ptr, addr_len) }
+        .filter(|s| !s.is_empty())
+        .unwrap_or("0.0.0.0")
+        .to_string();
+    bind_listener(&addr, port as u32, None)
+}
+
+/// Bind a TLS listener on `0.0.0.0:port` with a PEM cert chain + PEM private key — L3.1.
+/// Returns handle (>= 0), or -1 if the certificate/key is unusable or the bind fails.
+///
+/// # Safety
+/// The four `ptr`/`len` pairs must each describe a valid UTF-8 slice or be `(NULL, 0)`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_listen_tls(
+    port: i64,
+    cert_ptr: *const u8,
+    cert_len: usize,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> i64 {
+    unsafe { listen_tls_on("0.0.0.0", port, cert_ptr, cert_len, key_ptr, key_len) }
+}
+
+/// Bind a TLS listener on a caller-chosen address (`addr:port`) — L3.1 + L3.2 together.
+///
+/// # Safety
+/// Every `ptr`/`len` pair must describe a valid UTF-8 slice or be `(NULL, 0)`.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_listen_tls_on(
+    addr_ptr: *const u8,
+    addr_len: usize,
+    port: i64,
+    cert_ptr: *const u8,
+    cert_len: usize,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> i64 {
+    let addr = unsafe { loft_ffi::text_opt(addr_ptr, addr_len) }
+        .filter(|s| !s.is_empty())
+        .unwrap_or("0.0.0.0")
+        .to_string();
+    unsafe { listen_tls_on(&addr, port, cert_ptr, cert_len, key_ptr, key_len) }
+}
+
+/// # Safety
+/// The `ptr`/`len` pairs must each describe a valid UTF-8 slice or be `(NULL, 0)`.
+unsafe fn listen_tls_on(
+    addr: &str,
+    port: i64,
+    cert_ptr: *const u8,
+    cert_len: usize,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> i64 {
+    let cert = unsafe { loft_ffi::text_opt(cert_ptr, cert_len) }.unwrap_or("");
+    let key = unsafe { loft_ffi::text_opt(key_ptr, key_len) }.unwrap_or("");
+    match server_config_from_pem(cert, key) {
+        Some(cfg) => bind_listener(addr, port as u32, Some(cfg)),
+        None => -1,
+    }
+}
+
+/// Accept the next connection from a listener, completing the TLS handshake if it is a TLS
+/// listener. Returns:
+///   `Some(Ok(stream))`  — a connection was accepted (and, for TLS, handshaked)
+///   `Some(Err(()))`     — an error (accept failed, or the TLS handshake failed)
+///   `None`              — nothing pending (WouldBlock)
+/// `nonblocking` sets the listener's mode for this accept. A TLS handshake failure is an
+/// error for THIS connection only — never a downgrade to plaintext.
+fn accept_stream(handle: i32, nonblocking: bool) -> Option<Result<ServerStream, ()>> {
+    let accepted = LISTENERS.with(|l| {
+        let l = l.borrow();
+        let listener = l.get(handle as usize).and_then(|opt| opt.as_ref())?;
+        let _ = listener.tcp.set_nonblocking(nonblocking);
+        match listener.tcp.accept() {
+            Ok((s, _)) => Some(Some((s, listener.tls.clone()))),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Some(None),
+            Err(_) => Some(None),
+        }
+    })?;
+    let (tcp, tls) = accepted?;
+    match tls {
+        None => Some(Ok(ServerStream::plain(tcp))),
+        Some(cfg) => {
+            // Complete the TLS handshake synchronously (blocking) so a failure surfaces HERE,
+            // not later as a mid-stream error that looks like a broken client.
+            let _ = tcp.set_nonblocking(false);
+            let conn = match rustls::ServerConnection::new(cfg) {
+                Ok(c) => c,
+                Err(_) => return Some(Err(())),
+            };
+            let mut sock = tcp;
+            let mut conn = conn;
+            if conn.complete_io(&mut sock).is_err() {
+                return Some(Err(()));
+            }
+            Some(Ok(ServerStream::tls(rustls::StreamOwned::new(conn, sock))))
         }
     }
 }
@@ -147,22 +442,9 @@ pub extern "C" fn n_tcp_listen(port: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_accept_nonblocking(handle: i64) -> bool {
     let handle = handle as i32;
-    let stream = LISTENERS.with(|l| {
-        let l = l.borrow();
-        let listener = match l.get(handle as usize).and_then(|opt| opt.as_ref()) {
-            Some(l) => l,
-            None => return None,
-        };
-        let _ = listener.set_nonblocking(true);
-        match listener.accept() {
-            Ok((s, _)) => Some(Some(s)),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Some(None),
-            Err(_) => Some(None),
-        }
-    });
-    let mut stream = match stream {
-        Some(Some(s)) => s,
-        _ => return false,
+    let mut stream = match accept_stream(handle, true) {
+        Some(Ok(s)) => s,
+        _ => return false, // nothing pending, accept error, or TLS handshake failure
     };
     // The accepted stream may inherit non-blocking from the listener on some
     // platforms; force blocking so parse_request reads the (small) HTTP head
@@ -189,15 +471,9 @@ pub extern "C" fn n_tcp_accept_nonblocking(handle: i64) -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn n_tcp_accept(handle: i64) -> bool {
     let handle = handle as i32;
-    let stream = LISTENERS.with(|l| {
-        let l = l.borrow();
-        l.get(handle as usize)
-            .and_then(|opt| opt.as_ref())
-            .and_then(|listener| listener.accept().ok().map(|(s, _)| s))
-    });
-    let mut stream = match stream {
-        Some(s) => s,
-        None => return false,
+    let mut stream = match accept_stream(handle, false) {
+        Some(Ok(s)) => s,
+        _ => return false,
     };
     match parse_request(&mut stream) {
         Some((method, path, headers, body)) => {
@@ -424,7 +700,7 @@ pub extern "C" fn n_tcp_close(handle: i64) {
 // ── WebSocket C-ABI exports (SRV.3) ─────────────────────────────────────
 
 thread_local! {
-    static WS_CONNS: RefCell<Vec<Option<TcpStream>>> = const { RefCell::new(Vec::new()) };
+    static WS_CONNS: RefCell<Vec<Option<ServerStream>>> = const { RefCell::new(Vec::new()) };
     static WS_LAST_MSG: RefCell<String> = const { RefCell::new(String::new()) };
     static WS_LAST_OPCODE: RefCell<u8> = const { RefCell::new(0) };
 }
@@ -594,27 +870,14 @@ enum AcceptOutcome {
 }
 
 fn try_accept_inner(listener_handle: i32) -> AcceptOutcome {
-    // Snapshot the listener and ensure non-blocking, then try accept.
-    let stream_opt = LISTENERS.with(|l| {
-        let l = l.borrow();
-        let listener = l
-            .get(listener_handle as usize)
-            .and_then(|opt| opt.as_ref())?;
-        let _ = listener.set_nonblocking(true);
-        match listener.accept() {
-            Ok((s, _)) => Some(Ok(s)),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
-            Err(_) => Some(Err(())),
-        }
-    });
-    let mut stream = match stream_opt {
+    // Accept + (for a TLS listener) complete the handshake in one place.
+    let mut stream = match accept_stream(listener_handle, true) {
         None => return AcceptOutcome::NoneYet,
         Some(Ok(s)) => s,
-        Some(Err(())) => return AcceptOutcome::Error,
+        Some(Err(())) => return AcceptOutcome::Error, // accept or TLS handshake failed
     };
-    // The accepted stream inherits non-blocking state on some platforms;
-    // force blocking for the HTTP read (small, finite), then switch to
-    // a short read timeout for the post-upgrade WS read polling.
+    // Force blocking for the HTTP read (small, finite); the post-upgrade WS read polling
+    // switches to a short read timeout below.
     let _ = stream.set_nonblocking(false);
     let (method, path, headers, body) = match parse_request(&mut stream) {
         Some(t) => t,
@@ -736,26 +999,15 @@ fn poll_one_client(id: i32) -> PollOutcome {
             // @PLN18 phase 00(b) — fast-idle poll.  The blocking 20 ms read
             // timeout made every IDLE client cost ~21 ms per scan, so one empty
             // drain sweep cost N x 21 ms (measured 252.5 ms at 12 clients) and
-            // the server tick collapsed (the "12 Hz" finding).  Peek the 2-byte
-            // WS header with the stream non-blocking first: nothing pending ->
-            // NoData in microseconds; bytes pending -> fall through to the
-            // existing blocking frame read (its remainder is already in
-            // flight, and the 20 ms timeout still bounds a torn frame).
-            let _ = stream.set_nonblocking(true);
-            let mut hdr = [0u8; 2];
-            let peeked = stream.peek(&mut hdr);
-            let _ = stream.set_nonblocking(false);
-            match peeked {
-                Ok(0) => return PollOutcome::Disconnected, // orderly close
-                Ok(n) if n < 2 => return PollOutcome::NoData, // header still arriving
-                Ok(_) => {}                                // a frame is pending — read it
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    return PollOutcome::NoData;
-                }
-                Err(_) => return PollOutcome::Disconnected,
+            // the server tick collapsed (the "12 Hz" finding).  Probe the 2-byte
+            // WS header non-blocking first: nothing pending -> NoData in
+            // microseconds; bytes pending -> fall through to the blocking frame
+            // read.  `probe_header` is non-destructive on both transports (plain
+            // via `peek`, TLS via a read-ahead buffer the frame read drains).
+            match stream.probe_header() {
+                Probe::Closed => return PollOutcome::Disconnected,
+                Probe::Pending => return PollOutcome::NoData,
+                Probe::Ready => {} // a frame is pending — read it
             }
             match websocket::ws_read_frame_detailed(stream) {
                 websocket::ReadOutcome::NoData => return PollOutcome::NoData,
@@ -999,5 +1251,179 @@ mod tests {
 
         drop(server_stream);
         let _ = client.join();
+    }
+
+    // ── L3 verification: the server terminates TLS for HTTP and WebSocket ───────────────────
+    const CERT_PEM: &str = include_str!("../tests/fixtures/cert.pem");
+    const KEY_PEM: &str = include_str!("../tests/fixtures/key.pem");
+
+    // A rustls client that trusts anything — the fixture cert is self-signed, and this is the
+    // client half of the loopback test, not production. Mirrors the web client's dev opt-out.
+    #[derive(Debug)]
+    struct NoVerify;
+    impl rustls::client::danger::ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &[rustls_pki_types::CertificateDer<'_>],
+            _: &rustls_pki_types::ServerName<'_>,
+            _: &[u8],
+            _: rustls_pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &rustls_pki_types::CertificateDer<'_>,
+            _: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .supported_schemes()
+        }
+    }
+
+    fn client_config() -> Arc<rustls::ClientConfig> {
+        Arc::new(
+            rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify))
+            .with_no_client_auth(),
+        )
+    }
+
+    // Connect a TLS client to 127.0.0.1:port and return the handshaked stream.
+    fn tls_client(port: u16) -> rustls::StreamOwned<rustls::ClientConnection, TcpStream> {
+        let name = rustls_pki_types::ServerName::try_from("localhost").unwrap();
+        let mut conn = rustls::ClientConnection::new(client_config(), name).unwrap();
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        conn.complete_io(&mut sock).expect("client TLS handshake");
+        rustls::StreamOwned::new(conn, sock)
+    }
+
+    #[test]
+    fn server_config_from_pem_accepts_good_rejects_bad() {
+        assert!(
+            server_config_from_pem(CERT_PEM, KEY_PEM).is_some(),
+            "a valid PEM cert+key builds a server config"
+        );
+        assert!(
+            server_config_from_pem("not a certificate", "not a key").is_none(),
+            "garbage PEM is rejected — a TLS listener never falls back to cleartext"
+        );
+        assert!(
+            server_config_from_pem("", KEY_PEM).is_none(),
+            "an empty cert chain is rejected"
+        );
+    }
+
+    // L3.2: listen_on binds the requested address, not the 0.0.0.0 wildcard.
+    #[test]
+    fn bind_address_is_honored() {
+        let h = bind_listener("127.0.0.1", 0, None);
+        assert!(h >= 0, "loopback bind succeeds");
+        let bound_ip = LISTENERS.with(|l| {
+            l.borrow()[h as usize]
+                .as_ref()
+                .unwrap()
+                .tcp
+                .local_addr()
+                .unwrap()
+                .ip()
+        });
+        assert!(bound_ip.is_loopback(), "a 127.0.0.1 listener is bound to loopback, not the wildcard");
+    }
+
+    // L3.1 + L3.3: a TLS listener terminates HTTP AND a WebSocket upgrade + echo, over the same
+    // op surface a plaintext server uses — the server side never mentions TLS.
+    #[test]
+    fn tls_http_then_ws_over_the_same_surface() {
+        let cfg = server_config_from_pem(CERT_PEM, KEY_PEM).unwrap();
+        let handle = bind_listener("127.0.0.1", 0, Some(cfg)) as i32;
+        let port = LISTENERS.with(|l| {
+            l.borrow()[handle as usize].as_ref().unwrap().tcp.local_addr().unwrap().port()
+        });
+
+        // (1) HTTP over TLS — L3.1. Client thread does GET /; server accepts + responds.
+        let c1 = thread::spawn(move || {
+            let mut tls = tls_client(port);
+            tls.write_all(b"GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+            let mut buf = [0u8; 256];
+            let n = tls.read(&mut buf).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let mut s = match accept_stream(handle, false).unwrap() {
+            Ok(s) => s,
+            Err(()) => panic!("TLS accept/handshake failed"),
+        };
+        let (method, path, _h, _b) = parse_request(&mut s).expect("parse the request over TLS");
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/hello");
+        let body = b"tls-ok";
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+        s.write_all(resp.as_bytes()).unwrap();
+        s.flush().unwrap();
+        drop(s);
+        let got = c1.join().unwrap();
+        assert!(got.starts_with("HTTP/1.1 200 OK"), "client got a 200 over TLS: {got:?}");
+        assert!(got.trim_end().ends_with("tls-ok"), "client got the body over TLS: {got:?}");
+
+        // (2) WebSocket over TLS — L3.3. Client upgrades + sends a masked frame; server upgrades
+        // + reads it back through the same websocket path a plaintext server uses.
+        let c2 = thread::spawn(move || {
+            let mut tls = tls_client(port);
+            // a minimal, spec-correct upgrade request (the accept token is checked by the client
+            // in a real browser; here we just need the server to 101 and then read our frame)
+            let key = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 example key
+            let req = format!(
+                "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+                 Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            );
+            tls.write_all(req.as_bytes()).unwrap();
+            // read the 101 response head
+            let mut buf = [0u8; 256];
+            let _ = tls.read(&mut buf).unwrap();
+            // send one masked text frame "over-tls"
+            let payload = b"over-tls";
+            let mask = [0x11u8, 0x22, 0x33, 0x44];
+            let mut frame = vec![0x81u8, 0x80 | payload.len() as u8];
+            frame.extend_from_slice(&mask);
+            for (i, b) in payload.iter().enumerate() {
+                frame.push(b ^ mask[i % 4]);
+            }
+            tls.write_all(&frame).unwrap();
+            tls.flush().unwrap();
+            thread::sleep(std::time::Duration::from_millis(200));
+        });
+        let mut ws = match accept_stream(handle, false).unwrap() {
+            Ok(s) => s,
+            Err(()) => panic!("TLS accept for WS failed"),
+        };
+        let (_m, _p, headers, _b) = parse_request(&mut ws).expect("parse the WS upgrade over TLS");
+        assert!(websocket::ws_upgrade(&mut ws, &headers), "the server completes the WS upgrade over TLS");
+        let frame = websocket::ws_read_frame(&mut ws).expect("a WS frame arrives over TLS");
+        assert_eq!(frame.opcode, websocket::OP_TEXT);
+        assert_eq!(String::from_utf8_lossy(&frame.payload), "over-tls");
+        let _ = c2.join();
     }
 }
