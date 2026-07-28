@@ -2,6 +2,8 @@
 name = "game_protocol"
 version = "0.1.2"
 loft = ">=0.8"
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 repository = "loft-libs-net"
 
 [library]
