@@ -151,6 +151,12 @@ mod native_impl {
     /// worst case.
     const BACKOFF_MS: &[u64] = &[100, 250, 500, 1_000, 2_500, 5_000, 10_000];
 
+    /// Upper bound on a single read while completing the TLS + WebSocket upgrade. A healthy peer
+    /// answers the handshake in well under a millisecond on localhost / a LAN, so this only ever
+    /// fires for a peer that accepted the TCP connection but is not (yet) servicing the upgrade —
+    /// in which case we fast-fail the attempt rather than block. See the deadlock note in `try_open`.
+    const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
     thread_local! {
         static CONNS: RefCell<Vec<Option<Conn>>> = const { RefCell::new(Vec::new()) };
         static LAST_MSG: RefCell<String> = const { RefCell::new(String::new()) };
@@ -472,8 +478,18 @@ mod native_impl {
                     continue;
                 }
             };
-            // Wrap in TLS BEFORE the WS handshake for wss://. Both handshakes run in the socket's
-            // default blocking mode; the 7ms poll timeout is set only afterwards, on success.
+            // Bound the handshake reads. A peer that ACCEPTS the TCP connection but does not
+            // complete the WS (or TLS) upgrade — e.g. a loft server that is busy inside its OWN
+            // outbound federation pass and has not yet returned to its serve loop — must not be
+            // able to block us forever. Without this the byte-by-byte handshake read below runs in
+            // the socket's default *blocking* mode with no timeout, which DEADLOCKS two servers
+            // that federate with each other: each blocks waiting for the other to answer the
+            // upgrade while neither is serving. A finite read timeout turns that into a fast-fail —
+            // the outbound attempt gives up, the server returns to serving, and the peers' handshakes
+            // then complete. The successful path replaces this with the 7ms poll timeout at the end.
+            let _ = tcp.set_read_timeout(Some(HANDSHAKE_READ_TIMEOUT));
+            // Wrap in TLS BEFORE the WS handshake for wss://. Both handshakes run under the bounded
+            // read timeout set just above; the 7ms poll timeout is set afterwards, on success.
             let mut stream = if tls {
                 match tls_wrap(tcp, &host) {
                     Some(s) => s,
@@ -883,6 +899,32 @@ mod native_impl {
                 thread::sleep(Duration::from_millis(300)); // let the client read before we drop
             });
             port
+        }
+
+        // The deadlock regression: a peer that ACCEPTS the TCP connection but never answers the WS
+        // upgrade — the exact shape of a loft server busy inside its OWN outbound federation pass —
+        // must make `try_open` FAST-FAIL on the bounded handshake read, not block forever. Before
+        // HANDSHAKE_READ_TIMEOUT the byte-by-byte handshake read ran with no timeout and hung
+        // indefinitely, which deadlocked two servers federating with each other.
+        #[test]
+        fn handshake_read_is_bounded_against_a_silent_peer() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            thread::spawn(move || {
+                // Accept, then hold the connection open and send NOTHING (no 101, no bytes).
+                if let Ok((sock, _)) = listener.accept() {
+                    thread::sleep(Duration::from_secs(30));
+                    drop(sock);
+                }
+            });
+            let start = Instant::now();
+            let r = try_open(&format!("ws://127.0.0.1:{port}/"));
+            let elapsed = start.elapsed();
+            assert!(r.is_err(), "a peer that never completes the upgrade must fail, not connect");
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "try_open must fast-fail on the bounded handshake read, not block (took {elapsed:?})"
+            );
         }
 
         #[test]
