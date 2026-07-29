@@ -17,6 +17,9 @@ loft-ffi-macros = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1"
 webpki-roots = "0.26"
+# Parse PEM certs from SSL_CERT_FILE so the HTTP client can additionally trust a
+# private / test CA (curl's --cacert convention); verification stays on.
+rustls-pemfile = "2"
 
 [build-dependencies]
 loft-ffi-build = "0.2"

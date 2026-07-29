@@ -21,12 +21,13 @@ fn do_request(
     body: Option<&str>,
     headers: &[(&str, &str)],
 ) -> (i32, Vec<u8>, Vec<(String, String)>) {
+    let agent = http_agent();
     let mut req = match method {
-        "GET" => ureq::get(url),
-        "POST" => ureq::post(url),
-        "PUT" => ureq::put(url),
-        "DELETE" => ureq::delete(url),
-        "HEAD" => ureq::head(url),
+        "GET" => agent.get(url),
+        "POST" => agent.post(url),
+        "PUT" => agent.put(url),
+        "DELETE" => agent.delete(url),
+        "HEAD" => agent.head(url),
         _ => return (0, Vec::new(), Vec::new()),
     };
     for (k, v) in headers {
@@ -53,6 +54,35 @@ fn do_request(
     let mut body_bytes = Vec::new();
     let _ = resp.into_reader().read_to_end(&mut body_bytes);
     (status, body_bytes, resp_headers)
+}
+
+/// A ureq agent whose TLS root store is the bundled Mozilla roots (webpki-roots)
+/// PLUS any CAs named by the `SSL_CERT_FILE` environment variable — the same
+/// convention curl (`--cacert` / `SSL_CERT_FILE`) and openssl use. Certificate
+/// verification stays ON; `SSL_CERT_FILE` only ADDS trust anchors, so a private
+/// or test CA (e.g. an internal / Pebble ACME endpoint) can be reached without
+/// weakening validation of public endpoints. Unset `SSL_CERT_FILE` → the default
+/// public-roots behaviour, unchanged.
+fn http_agent() -> ureq::Agent {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Ok(path) = std::env::var("SSL_CERT_FILE") {
+        if let Ok(pem) = std::fs::read(&path) {
+            let mut rd: &[u8] = &pem;
+            for cert in rustls_pemfile::certs(&mut rd).flatten() {
+                let _ = roots.add(cert);
+            }
+        }
+    }
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring provider supports the default protocol versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    ureq::AgentBuilder::new()
+        .tls_config(std::sync::Arc::new(config))
+        .build()
 }
 
 fn parse_headers(header_text: &str) -> Vec<(&str, &str)> {
