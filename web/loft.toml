@@ -1,6 +1,6 @@
 [package]
 name = "web"
-version = "0.3.3"
+version = "0.3.4"
 loft = ">=0.8"
 api_compatible_with = "0.3.0"
 data_compatible_with = "0.3.0"
