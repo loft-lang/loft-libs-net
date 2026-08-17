@@ -9,6 +9,15 @@
 // to build this file if either regresses.
 use server;
 
+// @SRV-001 — bind honestly, or say so.  `listen` HALTS when the port is not free, and
+// that is the design, not a rough edge: a `Server` built on a failed bind is
+// indistinguishable from a healthy one at every call site, so the process would report
+// itself up and serve nobody — invisible from outside too, because a readiness probe
+// that connects to the port reaches whoever DID win the bind.  When losing the port is
+// an outcome you mean to handle (retry, scan a range), take the recoverable door:
+// `try_listen` never halts, and `bound()` is the check that makes its result usable.
+// Every other method on an unbound server quietly does nothing, so skipping `bound()`
+// buys back exactly the silence `listen` exists to prevent.
 fn main() {
   // Verify Server struct creation
   srv = server::listen(18082);
