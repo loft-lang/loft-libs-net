@@ -1,0 +1,17 @@
+# Worked-example rollout verdicts for packages that carry NO tags (@PLN141).
+# Hand-written, one row per package:  package <TAB> exempt|deferred <TAB> reason
+#
+# exempt   — no function here teaches more from a call site than from its signature.
+#            This is the convention's no-retroactive-sweep clause, written down: a
+#            package with nothing to demonstrate says so, instead of reading the same
+#            as a package nobody has looked at.
+# deferred — one DOES owe an example, but not in this pass; the reason names what
+#            unblocks it, and the monthly by-hand review (LIBRARY_DOC_REVIEW.md) is
+#            where it returns.
+#
+# A package that is neither tagged nor listed here is TODO and holds the repo's PR.
+# Read the current state with, from a loft checkout:
+#   make examples-progress REPO=../loft-libs-net
+#
+# package	verdict	reason
+game_protocol	exempt	Every public function is msg_<kind>(args) -> GameEnvelope: the arguments land verbatim in named fields of a struct literal and nothing else happens. There is no call order, no encoding, and no return value that can mean something other than it says — its own tests are field-echo assertions, which is the shape of an API a signature already explains.
