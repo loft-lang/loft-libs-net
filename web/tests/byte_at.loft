@@ -7,7 +7,9 @@
 // `pack_take()` buffer or a WebSocket binary frame.
 //
 // `byte_at` returns the byte value (0..255) at `idx` in the
-// underlying UTF-8 bytes of `t`.  Out-of-range returns 0 (no panic).
+// underlying UTF-8 bytes of `t`.  Out-of-range returns -1 (no panic)
+// — NOT 0, which is a byte a binary frame legitimately carries; see
+// `test_byte_at_out_of_range` below and @WEB-002.
 
 use web;
 

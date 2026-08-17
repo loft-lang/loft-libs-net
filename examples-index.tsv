@@ -5,3 +5,6 @@
 @SRV-001	server/tests/server.loft:12	main	https://github.com/loft-lang/loft-libs-net/blob/main/server/tests/server.loft#L12
 @SRV-002	server/tests/worked-examples.loft:18	test_header_folds_case_and_keeps_colons	https://github.com/loft-lang/loft-libs-net/blob/main/server/tests/worked-examples.loft#L18
 @SRV-003	server/tests/worked-examples.loft:48	test_serve_range_declines_and_serve_data_never_does	https://github.com/loft-lang/loft-libs-net/blob/main/server/tests/worked-examples.loft#L48
+@WEB-001	web/tests/worked-examples.loft:17	test_pack_protocol_carries_the_zero_byte	https://github.com/loft-lang/loft-libs-net/blob/main/web/tests/worked-examples.loft#L17
+@WEB-002	web/tests/worked-examples.loft:49	test_byte_at_reports_out_of_range_as_minus_one	https://github.com/loft-lang/loft-libs-net/blob/main/web/tests/worked-examples.loft#L49
+@WEB-003	web/tests/worked-examples.loft:72	test_ws_handler_is_not_a_connection	https://github.com/loft-lang/loft-libs-net/blob/main/web/tests/worked-examples.loft#L72

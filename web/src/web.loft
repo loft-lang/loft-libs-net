@@ -234,6 +234,7 @@ fn ws_client_close_native(handle: integer);
 // set `LOFT_WS_INSECURE_SKIP_VERIFY=1` in the native process — an
 // explicit opt-out, never a URL option, so it cannot be baked into a
 // deployed config by accident.
+// Example: @WEB-003 — a handle is not a connection; ask the traffic, not the handle.
 pub fn ws_handler(url: text) -> WsHandler {
   id = ws_client_connect_native(url);
   if id < 0 { return null; }
@@ -243,6 +244,7 @@ pub fn ws_handler(url: text) -> WsHandler {
 // Send a text message to the server.  Returns true on success; false
 // means the connection is currently in backoff / reconnecting and the
 // caller may retry after the next `pump()`.
+// Example: @WEB-003 — this false, not a null handle, is what reports the link down.
 pub fn send(self: WsHandler, msg: text) -> boolean {
   ws_client_send_native(self.id, msg)
 }
@@ -320,6 +322,7 @@ pub fn sleep_ms(ms: integer);
 // decode binary frames returned by `try_recv` / `pump` field-by-field.
 
 // Empty the per-thread pack buffer.  Call before each blob.
+// Example: @WEB-001 — reset, append in wire order, take (which moves, not reads).
 pub fn pack_reset();
 #native
 
@@ -339,6 +342,7 @@ pub fn pack_u32_le(v: integer);
 
 // Take the contents of the pack buffer and return them as a `text`
 // whose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.
+// Example: @WEB-001 — the three-step protocol, and the NUL that interpolation drops.
 pub fn pack_take() -> text;
 #native
 
@@ -347,6 +351,7 @@ pub fn pack_take() -> text;
 // via `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI
 // auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
 // not (Text, I32) -> I32.
+// Example: @WEB-002 — why the bounds test is `< 0` and never `== 0`.
 pub fn byte_at(idx: integer, t: text) -> integer;
 #native
 
