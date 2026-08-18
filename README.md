@@ -16,10 +16,10 @@ Per the chunked-repo design in
 
 | Subdir | Package | Status |
 |---|---|---|
-| [`web/`](web/) | `web` — HTTP client + WebSocket | v0.1.0 (extracted 2026-05-24) |
-| [`server/`](server/) | `server` — HTTP server + WebSocket server (depends on `web`) | v0.1.0 (extracted 2026-05-24) |
-| [`game_protocol/`](game_protocol/) | `game_protocol` — packet framing + game networking (depends on `web` + `server`) | v0.1.0 (extracted 2026-05-24) |
-| [`ssh/`](ssh/) | `ssh` — SSH client (interactive remote shell; password auth) | v0.1.0 (new 2026-07-14) |
+| [`web/`](web/) | `web` — HTTP client + WebSocket client | v0.3.5 |
+| [`server/`](server/) | `server` — HTTP server + WebSocket server (depends on `web`) | v0.5.1 |
+| [`game_protocol/`](game_protocol/) | `game_protocol` — per-tick state-update + event framing (depends on `web` + `server`) | v0.1.3 |
+| [`ssh/`](ssh/) | `ssh` — SSH client (interactive remote shell; password auth) | v0.1.1 |
 
 Internal chunk dependency graph:
 
@@ -46,10 +46,10 @@ Per-package tag prefix per the multi-package convention:
 
 | Package + version | Git tag |
 |---|---|
-| web 0.1.0 | `web-v0.1.0` |
-| server 0.1.0 | `server-v0.1.0` |
-| game_protocol 0.1.0 | `game_protocol-v0.1.0` |
-| ssh 0.1.0 | `ssh-v0.1.0` |
+| web 0.3.5 | `web-v0.3.5` |
+| server 0.5.1 | `server-v0.5.1` |
+| game_protocol 0.1.3 | `game_protocol-v0.1.3` |
+| ssh 0.1.1 | `ssh-v0.1.1` |
 
 ## License
 
