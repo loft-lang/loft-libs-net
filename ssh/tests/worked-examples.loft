@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `ssh` library (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a function whose correct use is not obvious from its
+// signature alone; the function documents itself by CITING the tag with
+// `// Example: @SSH-00N`, and `check_doc_drift.sh examples` fails if a citation goes
+// dangling (no test carries the tag).
+//
+// Neither needs an sshd.  @SSH-001 is about what a FAILED session does, so a refused
+// connection is the subject rather than a limitation; @SSH-002 is about how to read the
+// bytes `recv` hands back, which is a property of the text, not of the connection.
+use ssh;
+
+// @SSH-001 — every method self-guards, so nothing tells you the session is dead unless
+// you ask.  `connect` always answers a `Session`; a refused connection, a wrong host, a
+// closed port all give one back with a negative handle, and from there `login` and
+// `open_shell` answer false, `recv` answers "", `send` / `resize` / `close` do nothing,
+// and none of it raises.  That is deliberate — a terminal app must not die because a
+// host went away mid-frame — but it means a caller who skips `ok()` gets a program that
+// runs its whole session ladder, sends every keystroke, reads an endless empty stream,
+// and never once reports a problem.  Check `ok()` right after `connect`, before
+// authenticating; after that, `is_open()` is the per-iteration question, because the
+// remote can close the channel on a session that connected perfectly well.
+fn test_a_failed_session_is_silent_not_fatal() {
+  // Port 1 is privileged and unbound, so this is a refused connection.
+  s = ssh::connect("127.0.0.1", 1);
+  assert(!s.ok(), "ok() is the one call that reports the connect failed");
+  // Everything downstream stays callable and answers its own falsey value.
+  assert(!s.login("user", "secret"), "login on a dead session answers false");
+  assert(!s.open_shell("xterm-256color", 80, 24), "open_shell answers false");
+  assert(!s.is_open(), "is_open answers false");
+  idle = s.recv();
+  assert(idle.size() == 0, "recv answers an empty stream, never an error");
+  // The write side is a silent no-op rather than a failure a caller could notice.
+  s.send("tmux attach\n");
+  s.resize(100, 40);
+  // Closing a session that never opened is safe too.
+  s.close();
+}
+
+// @SSH-002 — `recv` hands back a raw BYTE stream, so bound the loop with `size`, never
+// `len`.  A terminal emits UTF-8, escape sequences and raw control bytes together, and
+// loft `text` measures `len` in CHARACTERS while `byte_at` indexes BYTES.  Bound a
+// byte-indexed loop by the character count and every multi-byte sequence loses its tail
+// — silently, since both are integers and the loop simply ends early.  `size` is the
+// byte count and is what `byte_at` is indexed against; out of range answers -1, which is
+// how a decoder tells the end of the stream from a legitimate 0 byte in it.
+fn test_recv_is_bytes_so_bound_the_loop_with_size() {
+  // One ASCII byte then a two-byte UTF-8 character: three bytes, two characters.
+  stream = "aé";
+  assert(stream.size() == 3, "the byte count is 3");
+  assert(stream.len() == 2, "the character count is 2 — the two disagree");
+  // The correct loop reaches every byte.
+  seen = 0;
+  for i in 0..stream.size() {
+    b = ssh::byte_at(i, stream);
+    assert(b >= 0, "every index below size() is a real byte");
+    seen += 1;
+  }
+  assert(seen == 3, "size() visits all three bytes");
+  // Bounding by len() stops one byte short, and nothing says so.
+  assert(ssh::byte_at(stream.len(), stream) == 0xA9,
+         "the byte a len()-bounded loop drops is a real one, not padding");
+  // Past the end is -1, distinct from a 0 byte the stream may genuinely carry.
+  assert(ssh::byte_at(stream.size(), stream) == -1, "one past the end answers -1");
+}

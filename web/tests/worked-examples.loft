@@ -1,0 +1,95 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `web` library (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a function whose correct use is not obvious from its
+// signature alone; the function documents itself by CITING the tag with
+// `// Example: @WEB-00N`, and `check_doc_drift.sh examples` fails if a citation goes
+// dangling (no test carries the tag).  These are teaching examples, distinct from the
+// unit suites in pack.loft / byte_at.loft.
+//
+// All three run without a network, like the rest of this package's CI tests: the
+// HTTP examples live in tests-network/ and are not run here.  @WEB-003 is the
+// interesting case — the contract it pins is precisely that a DOWN server is not an
+// error, so having no server is what makes it demonstrable.
+use web;
+
+// @WEB-001 — the pack builder exists because interpolation cannot carry a zero byte.
+// Loft `text` is a UTF-8 byte buffer and codepoint 0 is the `character` null sentinel,
+// so a blob assembled as `"{a}{b}{c}"` SILENTLY drops every NUL — and a binary header
+// with a small integer field (a type byte, a session id) is mostly NULs.  The builder
+// is a three-step protocol on a per-thread buffer: `pack_reset` empties it, the
+// `pack_u8` / `pack_u16_le` / `pack_u32_le` calls append in wire order, and `pack_take`
+// hands the bytes back AND resets — so `take` is a move, not a read, and calling it
+// twice answers an empty buffer the second time.  The returned `text` is only valid
+// until the next `pack_take`, so send or copy it before building the next blob.  Measure
+// it with `size()` (bytes); `len()` counts characters and will disagree.
+fn test_pack_protocol_carries_the_zero_byte() {
+  // A three-byte frame whose middle field is zero — the shape interpolation loses.
+  web::pack_reset();
+  web::pack_u8(0x01);
+  web::pack_u8(0x00);
+  web::pack_u8(0x02);
+  blob = web::pack_take();
+  assert(blob.size() == 3, "all three bytes survive the builder: {blob.size()}");
+  assert(web::byte_at(1, blob) == 0, "including the NUL in the middle");
+  // The same three bytes by interpolation: the zero is gone, and nothing said so.
+  one = 1 as character;
+  zero = 0 as character;
+  two = 2 as character;
+  interpolated = "{one}{zero}{two}";
+  assert(interpolated.size() == 2,
+         "interpolation silently drops the NUL — 2 bytes, not 3: {interpolated.size()}");
+  // `take` is a move: the buffer is empty afterwards, so build the next blob from
+  // `pack_reset` and never expect a second take to repeat the first.
+  again = web::pack_take();
+  assert(again.size() == 0, "pack_take resets — a second take answers nothing");
+}
+
+// @WEB-002 — an out-of-range `byte_at` answers -1, and that matters BECAUSE 0 is a
+// value the buffer legitimately carries.  Testing `byte_at(i, buf) == 0` as a bounds
+// check reads a real NUL field as the end of the frame, and reads an overrun as a NUL
+// field — both wrong, in opposite directions, in exactly the binary protocols this
+// helper exists for.  Test `< 0` instead.  Note the argument order too: `(idx, text)`,
+// not the `(text, idx)` every other accessor takes — it is fixed by what the C-ABI
+// auto-marshal supports, so it will not change to match.
+fn test_byte_at_reports_out_of_range_as_minus_one() {
+  web::pack_reset();
+  web::pack_u8(0x41);
+  web::pack_u8(0x00);
+  buf = web::pack_take();
+  // In range: an honest zero at index 1.
+  assert(web::byte_at(0, buf) == 0x41, "byte 0 is 'A'");
+  assert(web::byte_at(1, buf) == 0, "byte 1 is a real NUL field, value 0");
+  // Out of range on either side: -1, distinguishable from that NUL.
+  assert(web::byte_at(2, buf) == -1, "one past the end answers -1, not 0");
+  assert(web::byte_at(-1, buf) == -1, "a negative index answers -1 too");
+  // The bounds test that works, and the one that does not.
+  assert(web::byte_at(2, buf) < 0, "`< 0` separates an overrun from a NUL field");
+  assert(web::byte_at(1, buf) == web::byte_at(2, buf) + 1, "…which `== 0` cannot do");
+}
+
+// @WEB-003 — a handle is not a connection.  `ws_handler` answers null for ONE reason:
+// a malformed URL.  A well-formed URL whose server is down, not started yet, or
+// briefly unreachable still answers a usable handle, because reconnecting (with
+// exponential backoff) is the library's job, not the caller's.  So a non-null handle
+// says the URL parsed — never that anyone is listening, and a caller that treats it as
+// "connected" reports itself up against a server that does not exist.  What DOES report
+// the link state is the traffic: `send` answers false while the connection is in
+// backoff (retry after the next `pump`), and `try_recv` answers null for "nothing
+// pending", which an idle healthy link answers just as often as a down one.
+fn test_ws_handler_is_not_a_connection() {
+  // The one null case: a URL that cannot be parsed at all.
+  malformed = web::ws_handler("not-a-url");
+  assert(malformed == null, "a malformed URL is the only thing that answers null");
+  // A well-formed URL with nobody listening: still a handle, by design.
+  down = web::ws_handler("ws://127.0.0.1:47823/");
+  assert(down != null, "a well-formed URL always answers a handle, server or no server");
+  // Ask the traffic, not the handle.
+  sent = down.send("hello");
+  assert(!sent, "send answers false while reconnecting — retry after the next pump");
+  pending = down.try_recv();
+  assert(pending == null, "try_recv answers null for idle, which says nothing about health");
+  // `close` is what actually ends it: it stops the reconnect loop for good.
+  down.close();
+}

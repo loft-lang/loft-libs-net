@@ -1,0 +1,86 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for the `server` library (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a function whose correct use is not obvious from its
+// signature alone; the function documents itself by CITING the tag with
+// `// Example: @SRV-00N`, and `check_doc_drift.sh examples` fails if a citation goes
+// dangling (no test carries the tag).  The bind-honestly example @SRV-001 lives in
+// server.loft, on the smoke test that already demonstrated it.
+//
+// These build a `Request` by hand rather than accepting one off a socket, because what
+// they pin is a DECISION the request layer makes — which header matched, whether the
+// helper already answered — not the bytes that reach a client.  That is on purpose: the
+// decision is the half a caller gets wrong, and it is the half a single-process test can
+// hold honestly.  The wire itself stays the integration suite's job.
+use server;
+
+// @SRV-002 — `header` reads the wire, not your spelling of it.  HTTP header names are
+// case-insensitive and a client picks its own casing, so a caller comparing
+// `h.starts_with("Origin:")` against the raw `headers` vector misses `origin:` from the
+// very next client.  `header` folds case for you.  It also rejoins a value that itself
+// contains `:` — an `Origin` with a port, a `Date`, an `If-Range` — which is exactly
+// what a hand-rolled `h.split(':')[1]` silently truncates.  An absent header answers
+// "" and never null, so test it with `.len() == 0` and skip the `??`.
+fn test_header_folds_case_and_keeps_colons() {
+  req = server::Request {
+    method: "GET",
+    path: "/asset.bin",
+    body: "",
+    headers: ["Host: example.test",
+              "origin: http://site.test:8080",
+              "If-None-Match: v3-abc"]
+  };
+  // Any casing on either side finds it.
+  host = req.header("HOST");
+  assert(host == "example.test", "a header is found whatever the casing: {host}");
+  // The value's own colons survive: the port is part of the origin, not a separator.
+  origin = req.header("Origin");
+  assert(origin == "http://site.test:8080",
+         "a value containing ':' is rejoined intact: {origin}");
+  etag = req.header("if-none-match");
+  assert(etag == "v3-abc", "the conditional header reads back whole: {etag}");
+  // Absent is "" — an empty answer, not a null one.
+  absent = req.header("Range");
+  assert(absent.len() == 0, "an absent header answers an empty text, never null");
+}
+
+// @SRV-003 — the return value says WHO ANSWERED.  `serve_range` is the one helper here
+// that may decline: it answers false when the request carried no `Range` header, and
+// false means "I sent nothing — the full body is yours to serve".  Ignore that and the
+// client waits for a response nobody sent.  True means the helper already wrote a 206
+// or a 416, so responding again writes a second reply into the same connection.
+// `serve_data` is the opposite and always answers true: it takes the whole decision —
+// CORS preflight, `If-None-Match`, a byte range, a HEAD, or the plain 200 — so a
+// handler that calls it is done with that request.  Pick `serve_data` unless you need
+// the branch, and treat `serve_range`'s false as the only case you must handle.
+fn test_serve_range_declines_and_serve_data_never_does() {
+  body = "0123456789";
+  extra: vector<text> = [];
+  // No Range header: the helper declines, and the caller owes the full body.
+  plain = server::Request { method: "GET", path: "/d", body: "", headers: ["Host: x"] };
+  handled = plain.serve_range(body, extra);
+  assert(!handled, "no Range header — serve_range declines, YOU serve the full body");
+  // A Range header: the helper wrote the 206 itself; do not respond again.
+  ranged = server::Request { method: "GET", path: "/d", body: "",
+                             headers: ["Range: bytes=2-5"] };
+  did = ranged.serve_range(body, extra);
+  assert(did, "a Range header — serve_range already answered with a 206");
+  // An unsatisfiable or unknown range is still ANSWERED (with a 416), so it is still
+  // true.  The boolean reports who replied, never whether the client got what it asked.
+  refused = server::Request { method: "GET", path: "/d", body: "",
+                              headers: ["Range: bytes=99-200"] };
+  did_refuse = refused.serve_range(body, extra);
+  assert(did_refuse, "an unsatisfiable range is answered with a 416 — still true");
+  // serve_data takes every branch, so it is always true and always final.
+  preflight = server::Request { method: "OPTIONS", path: "/d", body: "",
+                                headers: ["Origin: http://site.test"] };
+  assert(preflight.serve_data(body, "", "*"), "serve_data answers the CORS preflight");
+  head = server::Request { method: "HEAD", path: "/d", body: "", headers: ["Host: x"] };
+  assert(head.serve_data(body, "", ""), "serve_data answers a HEAD with the length only");
+  fresh = server::Request { method: "GET", path: "/d", body: "",
+                            headers: ["If-None-Match: v3"] };
+  assert(fresh.serve_data(body, "v3", ""), "serve_data answers an unchanged etag with a 304");
+  full = server::Request { method: "GET", path: "/d", body: "", headers: ["Host: x"] };
+  assert(full.serve_data(body, "", ""), "and a plain GET with the whole body");
+}

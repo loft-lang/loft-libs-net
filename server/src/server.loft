@@ -131,6 +131,7 @@ fn ws_close_native(handle: integer);
 //
 // Use `try_listen` when losing the port is an outcome you mean to handle: retrying on
 // another port, or scanning a range.
+// Example: @SRV-001 — halting door vs recoverable door, and why `bound()` is not optional.
 pub fn listen(port: integer) -> Server {
   srv = try_listen(port);
   if !srv.bound() {
@@ -142,6 +143,7 @@ pub fn listen(port: integer) -> Server {
 // Like `listen`, but hands back an UNBOUND server instead of halting when the port
 // cannot be taken.  Check `bound()` before using it: every other method on an unbound
 // server does nothing, quietly.
+// Example: @SRV-001 — the retry shape: try_listen, then bound(), then use it.
 pub fn try_listen(port: integer) -> Server {
   Server { handle: tcp_listen(port) }
 }
@@ -234,6 +236,7 @@ pub fn respond_typed(self: Request, status: integer, body: text, content_type: t
 // Look up a request header case-insensitively (e.g. "Range", "Origin",
 // "If-None-Match"); returns "" if absent. Values containing ':' (an Origin URL,
 // a date) are rejoined intact.
+// Example: @SRV-002 — why a hand-rolled `h.split(':')[1]` over `headers` loses the port.
 pub fn header(self: Request, name: text) -> text {
   prefix = name.to_lowercase() + ":";
   for h in self.headers {
@@ -277,6 +280,7 @@ pub fn cors_headers(origin: text) -> vector<text> {
 // `extra` headers (CORS / ETag) to the 206 or 416. Returns true if a range
 // response was sent; false when there is no Range header (the caller serves the
 // full body). Single-range "bytes=off-last" / open-ended "bytes=off-" only.
+// Example: @SRV-003 — the boolean says WHO answered; false is the case you must handle.
 pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean {
   spec = self.header("Range");
   if spec.len() == 0 { return false; }
@@ -311,6 +315,7 @@ pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean {
 // One-call helper to serve a (possibly binary) resource with full byte-range +
 // CORS + HEAD + conditional support — the server counterpart to the web client's
 // http_get_range / http_size. `etag` "" skips conditional; `origin` "" skips CORS.
+// Example: @SRV-003 — this one takes every branch, so it is always true and always final.
 pub fn serve_data(self: Request, body: text, etag: text, origin: text) -> boolean {
   cors: vector<text> = [];
   if origin.len() > 0 {

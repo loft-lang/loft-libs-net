@@ -12,9 +12,13 @@
 //     s.send("tmux attach\n");
 //     while s.is_open() {
 //       out = s.recv();                 // non-blocking; "" when idle
-//       for i in 0..len(out) { handle_byte(ssh::byte_at(i, out)); }
+//       for i in 0..size(out) { handle_byte(ssh::byte_at(i, out)); }
 //     }
 //   }
+//
+// Note the `size(out)` bound: `recv` answers raw BYTES and `byte_at` indexes bytes,
+// while `len` counts CHARACTERS — a `0..len(out)` loop drops the tail of every
+// multi-byte sequence, silently.
 
 // A live SSH session.  `handle >= 0` once the TCP connect + transport handshake
 // succeed; `< 0` means the connect failed.  Obtain one from `connect`.
@@ -48,8 +52,10 @@ fn ssh_is_open(handle: integer) -> boolean;
 fn ssh_close(handle: integer);
 #native
 
-// Read the byte at `idx` (0..len) of a `recv` result.  A terminal stream is raw
-// bytes, so read it byte-by-byte rather than as UTF-8.  Out of range returns -1.
+// Read the byte at `idx` (0..size) of a `recv` result.  A terminal stream is raw
+// bytes, so read it byte-by-byte rather than as UTF-8.  Out of range returns -1 —
+// not 0, which the stream itself may legitimately carry.
+// Example: @SSH-002 — bound the loop with `size`, and test the end with `< 0`.
 pub fn byte_at(idx: integer, data: text) -> integer;
 #native
 
@@ -57,11 +63,14 @@ pub fn byte_at(idx: integer, data: text) -> integer;
 
 // Open a TCP connection to `host:port` and run the SSH transport handshake.
 // Check `ok()` before authenticating.
+// Example: @SSH-001 — a failed session stays callable and silent, so `ok()` is the
+// only thing that reports it.
 pub fn connect(host: text, port: integer) -> Session {
   Session { handle: ssh_connect(host, port) }
 }
 
 // True when the session connected and completed the transport handshake.
+// Example: @SSH-001 — skip this and the whole session ladder runs, quietly, on nothing.
 pub fn ok(self: Session) -> boolean {
   self.handle >= 0
 }
@@ -84,8 +93,10 @@ pub fn send(self: Session, data: text) {
 }
 
 // Return the bytes the remote shell produced since the last call, or "" when
-// nothing is pending (non-blocking).  Binary-safe: iterate 0..len(result) and
-// read each byte with `byte_at`.
+// nothing is pending (non-blocking).  Binary-safe: iterate 0..size(result) and
+// read each byte with `byte_at` — `size` is the BYTE count, which is what
+// `byte_at` is indexed against; `len` counts characters and would truncate.
+// Example: @SSH-002 — the byte a `len`-bounded loop drops, and why -1 is not 0.
 pub fn recv(self: Session) -> text {
   if self.handle < 0 { return ""; }
   ssh_recv(self.handle)
