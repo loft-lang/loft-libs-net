@@ -1,6 +1,7 @@
 [package]
 name = "web"
 version = "0.3.4"
+description = "HTTP client and WebSocket client for loft"
 loft = ">=0.8"
 api_compatible_with = "0.3.0"
 data_compatible_with = "0.3.0"

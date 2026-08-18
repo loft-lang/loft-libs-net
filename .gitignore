@@ -2,3 +2,8 @@ target/
 */native/target/
 *.tar.gz
 .DS_Store
+**/.loft/
+native-auto/
+**/native-auto/
+loft.lock
+*/loft.lock
