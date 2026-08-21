@@ -75,6 +75,10 @@ fn tcp_respond(status: integer, body: text);
 fn tcp_respond_typed(status: integer, body: text, content_type: text);
 #native
 
+// Respond with a RAW BYTE body — the one response that does not go through `text`.
+fn tcp_respond_bytes(status: integer, body: vector<u8>, content_type: text);
+#native
+
 // Respond with caller-controlled headers (a vector serialized to newline text).
 fn tcp_respond_full(status: integer, body: text, headers: text);
 #native
@@ -229,6 +233,24 @@ pub fn respond(self: Request, status: integer, body: text) {
 pub fn respond_typed(self: Request, status: integer, body: text, content_type: text) {
   _ = self;
   tcp_respond_typed(status, body, content_type);
+}
+
+// Send a response whose body is RAW BYTES — an image, a font, a wasm module, any
+// payload that is not text.
+//
+// ⚠⚠ USE THIS FOR ANYTHING BINARY; the text responses cannot carry it and FAIL SILENTLY.
+// `respond`/`respond_typed` take loft `text`, and a `text` built from non-UTF-8 bytes is
+// the EMPTY text (`text_from_bytes` documents exactly that). So serving a PNG through
+// them answers **200 OK with Content-Length: 0** — a success the caller cannot
+// distinguish from an empty file, and a broken image with no error anywhere. Measured
+// 2026-08-21: the loft review viewer had been serving every `doc/images/*.png` that way.
+//
+// `content_type` empty defaults to `application/octet-stream`, which is the honest
+// answer for bytes of unknown kind — name the real type when you know it
+// (`image/png`, `font/woff2`, `application/wasm`).
+pub fn respond_bytes(self: Request, status: integer, body: vector<u8>, content_type: text) {
+  _ = self;
+  tcp_respond_bytes(status, body, content_type);
 }
 
 // --- #517 server: request-header lookup + full-header responses ---
