@@ -6,7 +6,7 @@
 
 mod websocket;
 
-use loft_ffi::LoftStr;
+use loft_ffi::{LoftRef, LoftStore, LoftStr};
 use loft_ffi_macros::loft_native;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -562,6 +562,68 @@ pub unsafe extern "C" fn n_tcp_respond_typed(
         .filter(|s| !s.is_empty())
         .unwrap_or("text/plain; charset=utf-8");
     unsafe { write_response(status, ct, body_ptr, body_len) }
+}
+
+/// `#native "n_tcp_respond_bytes"` — respond with a RAW BYTE BODY.
+///
+/// ⚠⚠ WHY THIS EXISTS RATHER THAN REUSING `respond_typed`.  Every other respond takes
+/// loft `text`, and `write_response` runs the body through `loft_ffi::text_opt`, which
+/// validates UTF-8 and yields `""` on failure.  A PNG is not valid UTF-8, so serving one
+/// through the text path produced **HTTP 200 with Content-Length: 0** — a successful
+/// empty response, which is the worst possible failure: the browser shows a broken image
+/// and nothing anywhere reports an error.  Measured 2026-08-21 against the loft repo's
+/// own `doc/images/*.png`, every one of which the review viewer was serving that way.
+///
+/// `text_from_bytes` does not rescue it either — its documented behaviour for
+/// non-UTF-8 input is the empty text.  The bytes have to stay bytes end to end, which is
+/// what this does: read the `vector<u8>` straight out of the store and hand the slice to
+/// `send_and_close` with no string in the path.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_tcp_respond_bytes(
+    store: LoftStore,
+    status: i64,
+    body: LoftRef,
+    ct_ptr: *const u8,
+    ct_len: usize,
+) {
+    let status = status as u16;
+    let ct = unsafe { loft_ffi::text_opt(ct_ptr, ct_len) }
+        .filter(|s| !s.is_empty())
+        .unwrap_or("application/octet-stream");
+    let bytes = unsafe { read_byte_vector(&store, &body) };
+
+    // Headers built as text, body appended as bytes — the two are concatenated at the
+    // byte level so nothing re-validates the payload.
+    let head = format!(
+        "HTTP/1.1 {status} {}\r\n\
+         Content-Length: {}\r\n\
+         Content-Type: {ct}\r\n\
+         Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n\
+         Pragma: no-cache\r\n\
+         Expires: 0\r\n\
+         Connection: close\r\n\r\n",
+        status_text(status),
+        bytes.len()
+    );
+    let mut out = Vec::with_capacity(head.len() + bytes.len());
+    out.extend_from_slice(head.as_bytes());
+    out.extend_from_slice(&bytes);
+    send_and_close(&out);
+}
+
+/// Read a loft `vector<u8>` out of the store as a byte slice.  An unset ref or a
+/// zero-length vector answers empty rather than faulting.
+unsafe fn read_byte_vector(store: &LoftStore, vec: &LoftRef) -> Vec<u8> {
+    if vec.rec == 0 {
+        return Vec::new();
+    }
+    let len = unsafe { store.vector_len(vec) } as usize;
+    if len == 0 {
+        return Vec::new();
+    }
+    let ptr = unsafe { store.vector_data_ptr(vec) };
+    unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
 }
 
 fn status_text(status: u16) -> &'static str {

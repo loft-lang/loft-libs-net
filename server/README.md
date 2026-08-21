@@ -68,6 +68,7 @@ Responders (each sends the reply and closes the connection):
 |---|---|
 | `req.respond(status, body)` | `body` as `text/plain` |
 | `req.respond_typed(status, body, content_type)` | `body` with your own `Content-Type` |
+| `req.respond_bytes(status, bytes, content_type)` | a **raw byte** body — images, fonts, wasm |
 | `req.respond_html(body)` | `body` as `text/html` (status 200) |
 | `req.respond_css(body)` | `body` as `text/css` (status 200) |
 | `req.respond_js(body)` | `body` as `application/javascript` (status 200) |
@@ -88,6 +89,14 @@ byte-range requests — including to a browser (wasm) client.
 - `req.header(name) -> text` — read a request header case-insensitively
   (`"Range"`, `"Origin"`, `"If-None-Match"`); `""` if absent. (`Request` also
   carries the full `headers: vector<text>`.)
+⚠⚠ **Anything binary must use `respond_bytes`, and the text responses fail SILENTLY on
+it.** `respond` / `respond_typed` take loft `text`, and a `text` built from non-UTF-8 bytes
+is the EMPTY text — `text_from_bytes` documents exactly that. So serving a PNG through them
+answers **`200 OK` with `Content-Length: 0`**: a success the caller cannot tell from an
+empty file, a broken image in the browser, and no error reported anywhere. Measured
+2026-08-21, that is how loft's own review viewer had been serving every `doc/images/*.png`.
+An empty `content_type` defaults to `application/octet-stream`.
+
 - `req.respond_with_headers(status, body, headers)` — reply with your own header
   lines (`Content-Range`, `ETag`, CORS, …); `Content-Length` is added
   automatically and the body is written **verbatim (binary-safe)**. Status codes
