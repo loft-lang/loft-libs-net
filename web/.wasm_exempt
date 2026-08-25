@@ -1,0 +1,14 @@
+The TLS stack has no wasm32 target.
+
+`ureq` + `rustls` are pinned to the `ring` provider, and `ring` builds its
+assembly and C through a build script with no wasm32-wasip2 path — so the
+cross-build fails in the dependency, before reaching any of this package's own
+code.
+
+A browser program does not want this crate anyway: `--html` reaches the network
+through the host, not through a native TLS stack.  What is missing is the
+headless wasip2 target, and that needs a wasm-capable TLS provider rather than a
+change here.
+
+Delete this file when `rustls` can be built for wasm32 here — most likely by
+moving off the `ring` provider — and the gate will hold the package to it.

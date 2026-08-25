@@ -1,0 +1,14 @@
+The TLS stack has no wasm32 target.
+
+`rustls` is pinned to its `ring` provider, and `ring` builds its assembly and C
+through a build script that has no wasm32-wasip2 path — so the cross-build fails
+in the dependency, before reaching any of this package's own code.
+
+This is not a defect in `server`, and it is not fixable here by target-gating:
+TLS is the point of the package rather than an optional device, so there is no
+useful build with it cfg'd out (unlike graphics, whose window layer is separable
+from its canvas — see loft's WASM.md § When the crate needs a device the target
+does not have).
+
+Delete this file when `rustls` can be built for wasm32 here — most likely by
+moving off the `ring` provider — and the gate will hold the package to it.

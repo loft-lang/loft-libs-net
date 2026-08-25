@@ -1,0 +1,13 @@
+The crypto stack has no wasm32 target.
+
+`russh` pulls in `aws-lc-sys`, which compiles AWS-LC's C through a build script
+with no wasm32-wasip2 path — so the cross-build fails in the dependency, before
+reaching any of this package's own code.
+
+This package already said so in prose: `loft.toml`'s `[wasm.bridge]` comment
+reads "`--native-wasm` (wasip2) is likewise out of scope: russh/tokio do not
+build against wasip2."  This file is that same statement where CI can read it,
+so the claim is checked rather than merely written down.
+
+Delete this file when `russh` can be built for wasm32 — and the gate will hold
+the package to it.
