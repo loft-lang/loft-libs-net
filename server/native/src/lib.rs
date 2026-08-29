@@ -263,13 +263,24 @@ fn parse_request<S: Read + Write>(stream: &mut S) -> Option<(String, String, Str
 // too — the two sides are one contract.
 
 /// Bind a listener at `addr:port` with an optional TLS config. The single home every listen
-/// variant routes through, so binding, the store, and the log line are written once.
+/// variant routes through, so binding, the store, and the admission line are written once.
+///
+/// A successful bind says NOTHING. It is the expected case, there is nothing for the caller to
+/// act on, and the line named this library rather than the program a reader is looking at —
+/// so an operator scanning stderr for problems was trained to skip the stream that carries
+/// them, and the chosen bind address was written into logs the author never opted into.
+/// A FAILED bind still reports, which is the case that deserves output.
+///
+/// `LOFT_NET_LISTEN_BANNER=1` asks for it back while developing, off by default like every
+/// other opt-in diagnostic.
 fn bind_listener(addr: &str, port: u32, tls: Option<Arc<rustls::ServerConfig>>) -> i64 {
     let bind = format!("{addr}:{port}");
     match TcpListener::bind(&bind) {
         Ok(tcp) => {
-            let scheme = if tls.is_some() { "https/wss" } else { "http/ws" };
-            eprintln!("loft server listening on {bind} ({scheme})");
+            if std::env::var_os("LOFT_NET_LISTEN_BANNER").is_some() {
+                let scheme = if tls.is_some() { "https/wss" } else { "http/ws" };
+                eprintln!("loft server listening on {bind} ({scheme})");
+            }
             LISTENERS.with(|l| {
                 let mut l = l.borrow_mut();
                 let idx = l.len();

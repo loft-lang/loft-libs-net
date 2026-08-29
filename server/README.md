@@ -27,6 +27,11 @@ server (the socket layer is native code; it is not available under
 request with one of the `respond*` methods, which sends the reply and closes
 the connection.
 
+**A successful bind says nothing.** It is the expected case and there is nothing for the
+caller to act on, so the only output your program produces is its own. Set
+`LOFT_NET_LISTEN_BANNER=1` to get a `loft server listening on <addr> (<scheme>)` line back
+on stderr while developing.
+
 **If the port cannot be taken, `listen` halts** with a message naming the port. That is
 deliberate: a server that did not get its port cannot do its job, and the previous
 behaviour — hand back a `Server` that accepts nothing — was invisible from inside the
