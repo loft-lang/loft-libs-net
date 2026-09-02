@@ -4,14 +4,45 @@
 //
 // Two stacks:
 //   1. Single-client HTTP / WebSocket: `listen` + `next` + `ws_upgrade`.
-//      Use this for one-off request handlers and the shipped
-//      `for req in srv` iterator pattern.
+//      Use this for one-off request handlers.  ONE connection is served at a
+//      time: `next` blocks until a client arrives and `respond` closes it.
 //   2. Multi-client WebSocket: `srv.run(on_event)`.
 //      The clean event-driven surface used by multiplayer servers.
 //      Loft programs register ONE handler `fn(WsEvent)` and Rust
 //      drives the accept loop, per-client polling, and disconnect
 //      detection.  Disconnects are silently absorbed — the loft
 //      program is not notified.  See the `run` doc block below.
+//
+// --- Using it (stack 1) ---
+//
+//     srv = server::try_listen_on("127.0.0.1", 8080);
+//     if !srv.bound() { return; }          // the port was taken; nothing halted
+//
+//     while running {
+//       req = srv.next();                  // blocks until someone connects
+//       if req.path == "/" {
+//         req.respond_html("<h1>hello</h1>");
+//       } else if req.path == "/style.css" {
+//         req.respond_css("body {{ color: red }}");
+//       } else {
+//         req.respond_404();
+//       }
+//     }
+//     srv.close();
+//
+// Exactly ONE respond per request — it is what closes the connection.  Bind to
+// `"127.0.0.1"` unless the server is meant to be reachable from the network;
+// plain `listen` takes every interface.
+//
+// ⚠ A CSS OR JS BODY WRITTEN AS A LOFT LITERAL NEEDS ITS BRACES DOUBLED.  `{` opens
+// an interpolation in loft text, so `"body { color: red }"` is a parse error and
+// `"body {{ color: red }}"` is the string above.  This bites `respond_css` and
+// `respond_js` hardest, because those bodies are mostly braces.
+//
+// ⚠ `for req in srv` DOES NOT COMPILE, though this header used to advertise it.
+// The loop wants `fn next(self: T) -> Item?` and `next` here is declared
+// `-> Request`, which aborts the compiler rather than refusing (loft#1310).  Use
+// the `while` above until that is fixed.
 
 // --- Types (must come before all functions) ---
 
@@ -164,6 +195,8 @@ pub fn listen_on(addr: text, port: integer) -> Server {
   }
   srv
 }
+// `listen_on` without the halt: an unbound server comes back instead.  Check
+// `bound()` — every other method on an unbound server does nothing, quietly.
 pub fn try_listen_on(addr: text, port: integer) -> Server {
   Server { handle: tcp_listen_on(addr, port) }
 }
@@ -182,6 +215,8 @@ pub fn listen_tls(port: integer, cert: text, key: text) -> Server {
   }
   srv
 }
+// `listen_tls` without the halt.  Check `bound()`; a bad certificate and a taken
+// port are the same answer here, so log the port before deciding which it was.
 pub fn try_listen_tls(port: integer, cert: text, key: text) -> Server {
   Server { handle: tcp_listen_tls(port, cert, key) }
 }
@@ -212,6 +247,12 @@ pub fn next_nonblocking(self: Server) -> Request {
   }
 }
 
+// BLOCK until a client connects, and answer its request.  The heart of stack 1:
+// call it in a loop, respond exactly once, and the connection closes.
+//
+// ⚠ Declared `-> Request` rather than `-> Request?`, which is why `for req in
+// srv` does not compile (loft#1310).  `next_nonblocking` is the variant that
+// answers null immediately when nobody is waiting.
 pub fn next(self: Server) -> Request {
   if !tcp_accept(self.handle) { return null; }
   Request {
@@ -222,6 +263,9 @@ pub fn next(self: Server) -> Request {
   }
 }
 
+// Answer with `text/plain` and CLOSE the connection.  Exactly one respond per
+// request — a second is not an error, it just has no connection left to write
+// to.  `respond_typed` is this with a Content-Type you choose.
 pub fn respond(self: Request, status: integer, body: text) {
   _ = self;
   tcp_respond(status, body);
@@ -377,16 +421,26 @@ pub fn respond_html(self: Request, body: text) {
   tcp_respond_typed(200, body, "text/html; charset=utf-8");
 }
 
+// 200 as `text/css`.
+//
+// ⚠ A stylesheet written as a loft literal needs its braces DOUBLED — `{` opens
+// an interpolation, so `"body {{ color: red }}"` is what produces `body {`.
+// Reading the file instead (`file(path).content()`) sidesteps it entirely.
 pub fn respond_css(self: Request, body: text) {
   _ = self;
   tcp_respond_typed(200, body, "text/css; charset=utf-8");
 }
 
+// 200 as `application/javascript`.  Same brace-doubling trap as `respond_css`,
+// and script bodies hit it on the first function they declare.
 pub fn respond_js(self: Request, body: text) {
   _ = self;
   tcp_respond_typed(200, body, "application/javascript; charset=utf-8");
 }
 
+// 200, serving loft SOURCE.  There is no registered MIME type for it, so this
+// goes out as `text/plain` — which is what makes it read in a browser tab
+// rather than download.
 pub fn respond_loft(self: Request, body: text) {
   _ = self;
   // No registered MIME for loft source; text/plain reads cleanly in a
@@ -394,28 +448,43 @@ pub fn respond_loft(self: Request, body: text) {
   tcp_respond_typed(200, body, "text/plain; charset=utf-8");
 }
 
+// The not-found answer.  Worth calling on every unmatched path: a request with
+// no respond at all leaves the client waiting for a body that never comes.
 pub fn respond_404(self: Request) {
   _ = self;
   tcp_respond(404, "Not Found");
 }
 
+// Give the port back.  A server that is never closed holds its port until the
+// process exits, which is what makes a restarted program fail to bind.
 pub fn close(self: Server) {
   tcp_close(self.handle);
 }
 
 // --- Single-client WebSocket API ---
 
+// Turn the connection the last `next` handed over into a WebSocket.  Answers
+// null if the request was not a valid upgrade — check before using it.
+//
+// Takes no request argument because it acts on the one parked connection: this
+// is the single-client stack, where there is only ever one.
 pub fn ws_upgrade() -> WebSocket {
   h = ws_upgrade_native();
   if h < 0 { return null; }
   WebSocket { ws_id: h }
 }
 
+// The next frame's payload, or null when the socket is done.  Nullable here,
+// which is what lets a `while` over it end cleanly.
+//
+// Ask `last_opcode()` afterwards to tell a text frame from a binary one.
 pub fn next(self: WebSocket) -> text? {
   if !ws_recv_native(self.ws_id) { return null; }
   ws_message_native()
 }
 
+// Send a TEXT frame.  False means the peer is gone — the return is the
+// disconnect notice, since nothing else reports one.
 pub fn send(self: WebSocket, msg: text) -> boolean {
   ws_send_native(self.ws_id, msg)
 }
@@ -435,6 +504,8 @@ pub fn last_opcode(self: WebSocket) -> integer {
   ws_opcode_native()
 }
 
+// Close the socket.  The peer sees a clean close rather than a dropped
+// connection, which is the difference between a reconnect and an error.
 pub fn close(self: WebSocket) {
   ws_close_native(self.ws_id);
 }
@@ -576,10 +647,13 @@ pub fn respond_html(self: Server, body: text) {
   _ = self;
   tcp_respond_typed(200, body, "text/html; charset=utf-8");
 }
+// The `Server` twin of `Request::respond_typed`, for replying to the request
+// parked by an `http` WsEvent inside a `run` handler.
 pub fn respond_typed(self: Server, status: integer, body: text, content_type: text) {
   _ = self;
   tcp_respond_typed(status, body, content_type);
 }
+// The same not-found answer, from inside a `run` handler.
 pub fn respond_404(self: Server) {
   _ = self;
   tcp_respond_typed(404, "Not Found", "text/plain; charset=utf-8");
