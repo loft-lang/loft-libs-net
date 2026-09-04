@@ -46,14 +46,19 @@
 
 // --- Types (must come before all functions) ---
 
+// A listening HTTP server, as the handle the native side gave it.  Made by `listen` and its
+// variants; everything else here takes it as `self`.
 pub struct Server {
   handle: integer
 }
 
+// One accepted WebSocket connection on this server, as its native-side id.
 pub struct WebSocket {
   ws_id: integer
 }
 
+// An HTTP request as the server hands it to a handler: the method, the path, the body and the
+// raw header lines.
 pub struct Request {
   method: text,
   path: text,

@@ -180,6 +180,8 @@ pub fn http_size(url: text) -> integer {
 // per-message handler look identical to the future direct-capture
 // style.
 
+// A WebSocket connection this program opened as a CLIENT, as the Rust-side slot that holds it.
+// Made by `ws_handler`; `send`, `send_binary`, `try_recv`, `pump` and `close` take it as `self`.
 pub struct WsHandler {
   id: integer            // Rust-side connection slot
 }
@@ -372,11 +374,15 @@ pub fn byte_at(idx: integer, t: text) -> integer;
 //     // ev.message has the data
 //   }
 
+// One message polled from a WebSocket group: the connection it came from (negative when nothing
+// was pending) and its text.
 pub struct WsGroupEvent {
   handle: integer,
   message: text
 }
 
+// A set of WebSocket connections polled together.  It carries no state on the loft side — the
+// Rust side owns the list — so the value only names the group.
 pub struct WsGroup {
   _dummy: integer   // no state on loft side; Rust owns the list
 }
