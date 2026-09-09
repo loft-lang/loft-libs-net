@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Fetching, streaming and framing bytes — and why text cannot carry them.
+//
+// `web` is the client half: HTTP requests (`http_get` and friends, including
+// byte-range reads of a large remote file), a WebSocket client that reconnects
+// on its own, and a small binary packer for the frames you send over it.
+//
+// It is not the server — that is `server`, which is built on this package and
+// whose guide does a live round trip between the two. It is not a browser DOM
+// binding either; on wasm the same calls are routed through the host's
+// `fetch()` and `WebSocket`, so a loft program compiled for the browser writes
+// the code below unchanged.
+//
+// ⚠ This guide runs WITHOUT a network, exactly as the package's CI does — the
+// live HTTP examples live in `tests-network/http.loft`. That is not a gap being
+// papered over: the contracts worth teaching here are what a call answers when
+// the other end is NOT there, and having no server is what makes them
+// demonstrable.
+use web;
+
+fn main() {
+  a_request_that_cannot_reach_anything();
+
+  // Every section is a function, and `main` calls each one. A section `main`
+  // does not call still COMPILES — so a renamed API is caught, and the
+  // assertions that check the example is RIGHT never run.
+  a_handle_is_not_a_connection();
+  frames_that_carry_a_zero_byte();
+  reading_one_byte_back();
+}
+
+// ## An unreachable server is an ANSWER, not an error
+//
+// `http_get` returns an `HttpResponse { status, body, headers }` whatever
+// happens. A server that is down, not started yet, or briefly unreachable
+// answers **status 0** — so the shape of a retry is a plain loop over the
+// status, and there is no error path to write.
+//
+// `response.ok()` is the 2xx test, and it is false for 0 as it is for 404.
+
+fn a_request_that_cannot_reach_anything() {
+  r = http_get("http://127.0.0.1:18999/nothing");   // nothing listens there
+  assert(r.status == 0, "an unreachable server answers 0, got {r.status}");
+  assert(!r.ok(), "…and ok() is false, exactly as it is for a 404");
+  assert(len(r.body) == 0, "…with an empty body");
+
+  n = http_size("http://127.0.0.1:18999/nothing");
+  assert(n == -1, "http_size answers -1 when the length is unavailable, got {n}");
+
+  println("http   : unreachable = status 0, size -1 — answers, never errors");
+}
+
+// That is the whole error model. A reachable server fills the same three fields:
+//
+//     r = http_get("https://example.com/");
+//     if r.ok() { println(r.body); }
+//
+// `http_post` / `http_put` / `http_delete` take a body; every one of them has an
+// `_h` twin taking a `vector<text>` of `"Key: Value"` request headers. For a
+// large remote file, `http_size(url)` then `http_get_range(url, offset, len)`
+// reads a slice as `206 Partial Content` instead of pulling the whole thing.
+//
+// ## A handle is not a connection
+//
+// `ws_handler(url)` answers null for ONE reason: a URL it cannot parse as a
+// WebSocket address. A well-formed `ws://` whose server is down still hands back
+// a usable handle, because reconnecting — with backoff — is the library's job
+// and not the caller's. So a non-null handle means *"this address is usable"*,
+// never *"a connection is open"*, and treating null as "the server is down" is
+// the mistake this shape invites.
+
+fn a_handle_is_not_a_connection() {
+  down = ws_handler("ws://127.0.0.1:18999/ws");     // nothing is listening
+  assert(down != null, "a well-formed address is usable even with no server there");
+
+  malformed = ws_handler("not a url");
+  assert(malformed == null, "null means the ADDRESS is unusable");
+
+  wrong_scheme = ws_handler("http://127.0.0.1:18999/ws");
+  assert(wrong_scheme == null, "…and an http:// URL is not a WebSocket address");
+
+  println("ws     : null means unusable ADDRESS, never a closed connection");
+}
+
+// ## Frames that carry a zero byte
+//
+// loft `text` is a UTF-8 byte buffer and codepoint 0 is the `character` null
+// sentinel — so a blob assembled by interpolation, `"{a}{b}{c}"`, SILENTLY drops
+// every NUL. A binary header with a small integer field (a type byte, a session
+// id, a length) is mostly NULs, so that is not an edge case, it is the common
+// one.
+//
+// The packer is why this library ships one: `pack_reset` empties a per-thread
+// buffer, the `pack_u8` / `pack_u16_le` / `pack_u32_le` calls append in wire
+// order, and `pack_take` hands the bytes back AND resets. So `take` is a MOVE,
+// not a read — a second take answers nothing, and the bytes are only valid until
+// the next one, so send or copy before building the next frame.
+//
+// Measure with `size()` (bytes). `len()` counts characters and will disagree.
+
+fn frames_that_carry_a_zero_byte() {
+  pack_reset();
+  pack_u8(1);
+  pack_u8(0);          // the field interpolation loses
+  pack_u8(2);
+  blob = pack_take();
+  assert(blob.size() == 3, "all three bytes survive the builder: {blob.size()}");
+
+  one = 1 as character;
+  zero = 0 as character;
+  two = 2 as character;
+  interpolated = "{one}{zero}{two}";
+  assert(interpolated.size() == 2,
+         "the same three by interpolation: {interpolated.size()} bytes, and nothing said so");
+
+  again = pack_take();
+  assert(again.size() == 0, "take is a MOVE — a second one answers nothing");
+
+  println("pack   : 3 bytes built, 2 by interpolation — the NUL is the difference");
+}
+
+// ## Reading one byte back
+//
+// `byte_at(idx, buf)` — note the argument order, which is `(index, text)` and
+// not the `(text, index)` every other accessor takes. It is fixed by what the
+// C-ABI auto-marshal supports, so it will not change to match.
+//
+// Out of range answers **-1**, and that matters BECAUSE 0 is a value the buffer
+// legitimately carries. Using `== 0` as a bounds check reads a real NUL field as
+// the end of the frame AND reads an overrun as a NUL field — wrong in both
+// directions, in exactly the binary protocols this helper exists for. Test `< 0`.
+
+fn reading_one_byte_back() {
+  pack_reset();
+  pack_u8(65);
+  pack_u8(0);
+  buf = pack_take();
+
+  assert(byte_at(0, buf) == 65, "byte 0 is 'A'");
+  assert(byte_at(1, buf) == 0, "byte 1 is an honest NUL field, value 0");
+  assert(byte_at(2, buf) == -1, "one past the end is -1, not 0");
+  assert(byte_at(-1, buf) == -1, "a negative index is -1 too");
+  assert(byte_at(2, buf) < 0, "`< 0` separates an overrun from a NUL field");
+
+  println("byte_at: (index, buf), and -1 for out of range — never 0");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the whole surface, including the byte-range client and the
+//   browser (`[wasm.bridge]`) routing.
+// - `tests/worked-examples.loft` — `@WEB-001` … `@WEB-003`, the three contracts
+//   above as running tests, and the calls the doc comments cite.
+// - `tests-network/http.loft` — the live HTTP examples, run by hand.
+// - `server` — the other half, and a guide that fetches from a server it starts.

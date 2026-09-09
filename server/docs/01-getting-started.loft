@@ -1,0 +1,141 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Answering HTTP requests, and the two ways a server can lie about being up.
+//
+// `server` opens a TCP port and hands you one `Request` per connection. You
+// answer each one with a `respond*` method, which sends the reply and closes
+// the connection. It also carries a WebSocket server, for one client or many.
+//
+// It is not the client half — that is `web` (`http_get`, `ws_handler`), which
+// this package depends on and which the round trip below uses. It is not a
+// framework: there is no router, no middleware and no template engine, because
+// a `for` loop over the server and an `if` on `req.path` are already those
+// things. And it is not the game wire format — that is `game_protocol`, which
+// is built on this.
+//
+// ## The smallest thing that does something
+//
+// A server that answers one request, and the client that asks — in one program,
+// because that is the shortest thing you can actually run:
+use server;
+use web;
+
+fn main() {
+  port = 18741;
+  parallel {
+    serve_one(port);
+    ask(port);
+  }
+
+  // Every section below is a function, and `main` calls each one. A section
+  // `main` does not call still COMPILES — so a renamed API is caught, and the
+  // assertions that check the example is RIGHT never run.
+  a_bind_that_fails_says_so();
+  the_accept_that_does_not_wait();
+  binary_bodies_need_respond_bytes();
+}
+
+fn serve_one(port: integer) {
+  srv = server::listen(port);
+  for req in srv {                       // one Request per connection; `next` blocks
+    if req.path == "/hello" { req.respond_html("<h1>Hello from loft</h1>"); }
+    else { req.respond_404(); }
+    break;                               // a real server keeps looping
+  }
+  srv.close();
+}
+
+fn ask(port: integer) {
+  // A server that is not up yet answers status 0 rather than failing, so the
+  // retry is a plain loop rather than error handling.
+  r = http_get("http://127.0.0.1:{port}/hello");
+  for _try in 0..50 {
+    if r.status != 0 { break; }
+    sleep_ms(20);
+    r = http_get("http://127.0.0.1:{port}/hello");
+  }
+  println("status : {r.status}");
+  println("body   : {r.body}");
+  assert(r.status == 200, "the route answered 200, got {r.status}");
+  assert(r.body == "<h1>Hello from loft</h1>", "…with the body it was given");
+}
+
+// That prints:
+//
+//     status : 200
+//     body   : <h1>Hello from loft</h1>
+//
+// `parallel { }` is only here because one program has to be both ends. Your
+// server is the `serve_one` half, with no `break` and no second arm.
+//
+// ## A bind that fails says so — loudly, on purpose
+//
+// `listen` HALTS when the port is not free. That is the design and not a rough
+// edge: a `Server` built on a failed bind is indistinguishable from a healthy
+// one at every call site, so the process would report itself up and serve
+// nobody — and invisible from outside too, because a readiness probe that
+// connects to the port reaches whoever DID win the bind.
+//
+// When losing the port is an outcome you mean to handle — retrying elsewhere,
+// scanning a range — take the recoverable door. `try_listen` never halts, and
+// `bound()` is the check that makes its answer usable: every other method on an
+// unbound server quietly does nothing, so skipping it buys back exactly the
+// silence `listen` exists to prevent.
+
+fn a_bind_that_fails_says_so() {
+  srv = server::try_listen(18742);
+  assert(srv.bound(), "a free port binds");
+
+  taken = server::try_listen(18742);     // writes one line to stderr, and continues
+  assert(!taken.bound(), "a port already held reports bound() == false");
+  assert(taken.handle < 0, "…and keeps a negative handle");
+
+  srv.close();
+  println("bind   : one holder, and the loser says so");
+}
+
+// ## The accept that does not wait
+//
+// `for req in srv` blocks until a client connects, which is what you want when
+// serving is all the process does. `next_nonblocking()` answers `null`
+// immediately when nothing is pending, so one loop can interleave HTTP accepts
+// with other work — a game tick, a WebSocket pump, a queue drain.
+
+fn the_accept_that_does_not_wait() {
+  srv = server::try_listen(18743);
+  pending = srv.next_nonblocking();
+  assert(pending == null, "nothing connected, so nothing to answer");
+  srv.close();
+  println("accept : null when idle, so the loop stays yours");
+}
+
+// ## The one that bites: a text response DROPS a binary body
+//
+// `respond` and `respond_typed` take loft `text`, and a `text` built from
+// non-UTF-8 bytes is the EMPTY text. So serving a PNG through them answers
+// **200 OK with Content-Length: 0** — a success the caller cannot tell from an
+// empty file, a broken image in the browser, and nothing reported anywhere.
+// Measured: that is how loft's own review viewer served every `doc/images/*.png`
+// for a while.
+//
+// `respond_bytes(status, bytes, content_type)` is the one that carries them.
+// The check below is on the value that reaches the responder rather than on a
+// served image, because the loss happens at the `text` conversion, before any
+// header is written — which is exactly why nothing downstream can see it.
+
+fn binary_bodies_need_respond_bytes() {
+  png_magic: vector<u8> = [137, 80, 78, 71, 13, 10, 26, 10];
+  as_text = text_from_bytes(png_magic);
+  assert(len(as_text) == 0, "a PNG header is not UTF-8, so `text` holds nothing of it");
+  assert(len(png_magic) == 8, "…while the bytes themselves are all there");
+  println("binary : respond_bytes, never respond — the text form loses it silently");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the whole surface: byte ranges and `serve_data`, CORS, the
+//   single-client and many-client WebSocket servers, and the header helpers.
+// - `tests/server.loft` and `tests/worked-examples.loft` — the best-explained
+//   calls in the package, each one a running example rather than a snippet.
+// - `web` — the client half, and the package this one is built on.
