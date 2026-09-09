@@ -237,7 +237,7 @@ pub fn bound(self: Server) -> boolean {
 // connection is pending.  Use this when the server interleaves HTTP
 // accept with multi-client WS polling on a single port (single_port
 // audience demo / future TTT-style multi-tab apps).
-pub fn next_nonblocking(self: Server) -> Request {
+pub fn next_nonblocking(self: Server) -> Request? {
   if !tcp_accept_nonblocking(self.handle) { return null; }
   Request {
     method: tcp_method(),
@@ -253,7 +253,7 @@ pub fn next_nonblocking(self: Server) -> Request {
 // ⚠ Declared `-> Request` rather than `-> Request?`, which is why `for req in
 // srv` does not compile (loft#1310).  `next_nonblocking` is the variant that
 // answers null immediately when nobody is waiting.
-pub fn next(self: Server) -> Request {
+pub fn next(self: Server) -> Request? {
   if !tcp_accept(self.handle) { return null; }
   Request {
     method: tcp_method(),
@@ -468,7 +468,7 @@ pub fn close(self: Server) {
 //
 // Takes no request argument because it acts on the one parked connection: this
 // is the single-client stack, where there is only ever one.
-pub fn ws_upgrade() -> WebSocket {
+pub fn ws_upgrade() -> WebSocket? {
   h = ws_upgrade_native();
   if h < 0 { return null; }
   WebSocket { ws_id: h }
@@ -610,7 +610,7 @@ pub fn run(self: Server, on_event: fn(WsEvent)) {
 //
 // Disconnect (kind 2) and malformed message frames are skipped internally
 // (the caller never sees them), so a null return always means "idle".
-pub fn poll_event(self: Server) -> WsEvent {
+pub fn poll_event(self: Server) -> WsEvent? {
   while ws_next_event_native(self.handle) {
     kind = ws_event_kind_native();
     cid  = ws_event_client_id_native();
