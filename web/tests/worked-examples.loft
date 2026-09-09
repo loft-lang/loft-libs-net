@@ -84,7 +84,17 @@ fn test_ws_handler_is_not_a_connection() {
   assert(malformed == null, "a malformed URL is the only thing that answers null");
   // A well-formed URL with nobody listening: still a handle, by design.
   down = web::ws_handler("ws://127.0.0.1:47823/");
-  assert(down != null, "a well-formed URL always answers a handle, server or no server");
+  // ⚠ The GUARD CLAUSE is the example, not ceremony around it.  `ws_handler` answers
+  // `WsHandler?` (0.4.0), so the null it is documented to return is now in the type —
+  // and a bare `assert(down != null, …)` does NOT make the handle usable: an assert is
+  // not a narrowing guard, so every method call after it stores a nullable into a
+  // non-null parameter.  `if down == null { … return; }` IS one: the fall-through
+  // proves `down` non-null for the rest of this block, which is what lets the calls
+  // below read as they do.
+  if down == null {
+    assert(false, "a well-formed URL always answers a handle, server or no server");
+    return;
+  }
   // Ask the traffic, not the handle.
   sent = down.send("hello");
   assert(!sent, "send answers false while reconnecting — retry after the next pump");
