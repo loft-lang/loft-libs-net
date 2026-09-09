@@ -235,7 +235,13 @@ fn ws_client_close_native(handle: integer);
 // explicit opt-out, never a URL option, so it cannot be baked into a
 // deployed config by accident.
 // Example: @WEB-003 — a handle is not a connection; ask the traffic, not the handle.
-pub fn ws_handler(url: text) -> WsHandler {
+//
+// ⚠ The return is `WsHandler?` and not `WsHandler`, because null is the whole
+// point of the call: it is the one distinction this function exists to make.
+// It used to be declared non-null, which meant the compiler called the
+// `== null` test the contract asks for redundant — the signature denied the
+// only thing it had to say.
+pub fn ws_handler(url: text) -> WsHandler? {
   id = ws_client_connect_native(url);
   if id < 0 { return null; }
   WsHandler { id: id }
