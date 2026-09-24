@@ -1,0 +1,135 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the request layer's header lookup, timed on a fixed
+// workload, with a hash of what it produced.  No socket is opened: `Request.header` is a
+// pure scan over the request's header lines, so the bench builds the Request itself.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, lookups one op
+// makes, ns per lookup, and an FNV-1a-32 hash of one canonical op's output.  The hash is
+// what makes a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not computing
+// the routine it claims to — and only then does comparing their speeds mean anything.
+//
+// Every op builds its own request from the repetition number `r`, and `r & 1` moves the
+// Origin port — never the amount of work — so no backend can hoist an op out of the
+// repetition loop.  Each op's result is folded into `sink`, printed on the last line.
+use server;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const LOOKUPS = 10000;
+
+/// FNV-1a-32 over every byte of a text, continuing from `h0`.
+fn fnv_text(h0: integer, t: text) -> integer {
+  ft_h = h0;
+  for i in 0..size(t) {
+    ft_h = ((ft_h ^ (t.byte_at(i) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  ft_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── header: a case-folded lookup over the request's 14 header lines ──
+
+/// A browser-shaped request: 14 headers, two values carrying ':' (the Origin's port, a
+/// date), mixed casing.  `r & 1` moves the Origin port; the lengths never change.
+fn make_request(r: integer) -> server::Request {
+  mr_port = 8080 + (r & 1);
+  server::Request {
+    method: "GET",
+    path: "/assets/tiles/0012.bin",
+    body: "",
+    headers: ["Host: tiles.example.test",
+              "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+              "Accept: application/octet-stream, */*;q=0.8",
+              "Accept-Language: en-US,en;q=0.5",
+              "Accept-Encoding: gzip, deflate, br, zstd",
+              "Referer: https://game.example.test/play",
+              "Origin: https://game.example.test:{mr_port}",
+              "Connection: keep-alive",
+              "Cookie: session=4f2a9c01d3; theme=dark",
+              "sec-fetch-dest: empty",
+              "sec-fetch-mode: cors",
+              "If-Modified-Since: Tue, 22 Sep 2026 10:15:00 GMT",
+              "if-none-match: \"v3-abc-0012\"",
+              "Range: bytes=4096-8191"]
+  }
+}
+
+/// The names a request handler asks for, in the casing a caller writes: early, middle and
+/// late headers, the two colon-carrying values, and one absent name that scans all 14.
+const NAMES: vector<text> = ["Host", "Origin", "range", "If-None-Match", "ACCEPT-ENCODING",
+                             "X-Forwarded-For", "If-Modified-Since", "cookie"];
+
+fn header_op(r: integer) -> integer {
+  ho_req = make_request(r);
+  ho_sum = 0;
+  for i in 0..LOOKUPS {
+    ho_v = ho_req.header(NAMES[i & 7]?);
+    ho_sum += size(ho_v);
+  }
+  ho_sum
+}
+
+/// The canonical op's values, hashed in lookup order.
+fn header_hash() -> integer {
+  hh_req = make_request(0);
+  hh_h = FNV_OFFSET;
+  for i in 0..LOOKUPS {
+    hh_h = fnv_text(hh_h, hh_req.header(NAMES[i & 7]?));
+  }
+  hh_h
+}
+
+fn bench_header(n: integer) -> Row {
+  bh_t0 = ticks();
+  bh_sink = 0;
+  for r in 0..n { bh_sink += header_op(r); }
+  bh_us = ticks() - bh_t0;
+  Row { name: "header", iters: n, us: bh_us, px: LOOKUPS, hash: header_hash(), sink: bh_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_header(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

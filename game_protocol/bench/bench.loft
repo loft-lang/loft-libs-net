@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the message constructors' hot door, timed on a fixed
+// workload, with a hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, calls one op
+// makes, ns per call, and an FNV-1a-32 hash of one canonical op's output.  The hash is what
+// makes a benchmark a VALIDATION: the interpreter, the native build and the pure-Rust twin
+// in bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to — and only then does comparing their speeds mean anything.
+//
+// `msg_ping` stamps each envelope with the wall clock (`now()`), which no two runs share, so
+// the hash covers every field but the timestamp; the timestamp is folded into `sink`.
+// Every op starts its sequence numbers at `r & 1` — a value, never the amount of work — so
+// no backend can hoist an op out of the repetition loop.
+use game_protocol;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const CALLS = 100000;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── msg_ping: a nested envelope built and returned by value ─────────
+
+/// [sequence sum, pings seen, sender+recipient+payload bytes, timestamp sum]: the first
+/// three are the hash, the last only the sink.
+fn ping_op(r: integer) -> vector<integer> {
+  po_seq = 0;
+  po_pings = 0;
+  po_bytes = 0;
+  po_stamp = 0;
+  for i in 0..CALLS {
+    po_env = msg_ping((r & 1) + i);
+    po_seq += po_env.sequence;
+    if po_env.message.msg_type == MsgType.Ping { po_pings += 1; }
+    po_bytes += size(po_env.sender) + size(po_env.recipient) + size(po_env.message.payload);
+    po_stamp += po_env.timestamp & 1023;
+  }
+  [po_seq, po_pings, po_bytes, po_stamp]
+}
+
+fn bench_ping(n: integer) -> Row {
+  bp_t0 = ticks();
+  bp_sink = 0;
+  for r in 0..n {
+    bp_one = ping_op(r);
+    bp_sink += bp_one[0]? + bp_one[3]?;
+  }
+  bp_us = ticks() - bp_t0;
+  bp_c = ping_op(0);
+  bp_v: vector<integer> = [bp_c[0]?, bp_c[1]?, bp_c[2]?];
+  Row { name: "msg_ping", iters: n, us: bp_us, px: CALLS, hash: fnv(FNV_OFFSET, bp_v),
+        sink: bp_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_ping(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
