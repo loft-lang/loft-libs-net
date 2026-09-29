@@ -7,7 +7,7 @@
 // — `send_binary` on WebSocket and `last_opcode` on WebSocket are
 // declared in lib/server/src/server.loft.  The compiler refuses
 // to build this file if either regresses.
-use server;
+use server::*;
 
 // @SRV-001 — bind honestly, or say so.  `listen` HALTS when the port is not free, and
 // that is the design, not a rough edge: a `Server` built on a failed bind is

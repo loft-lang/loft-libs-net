@@ -16,7 +16,7 @@
 //   v5-t1c: recv opcode=<n> len=<n>
 //   v5-t1c: ok
 
-use web;
+use web::*;
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");

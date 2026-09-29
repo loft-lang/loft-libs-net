@@ -10,7 +10,7 @@
 // Neither needs an sshd.  @SSH-001 is about what a FAILED session does, so a refused
 // connection is the subject rather than a limitation; @SSH-002 is about how to read the
 // bytes `recv` hands back, which is a property of the text, not of the connection.
-use ssh;
+use ssh::*;
 
 // @SSH-001 — every method self-guards, so nothing tells you the session is dead unless
 // you ask.  `connect` always answers a `Session`; a refused connection, a wrong host, a

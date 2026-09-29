@@ -38,7 +38,7 @@
 //       lib/game_protocol/examples/tictactoe_server_v3.loft
 //   then open http://localhost:7878/
 
-use server;
+use server::*;
 
 // Loft backtick strings interpolate `{expr}` — every literal `{`
 // in the HTML/JS/CSS body is escaped as `{{`.  The flip side is

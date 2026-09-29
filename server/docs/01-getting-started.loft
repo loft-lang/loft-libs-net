@@ -18,8 +18,8 @@
 //
 // A server that answers one request, and the client that asks — in one program,
 // because that is the shortest thing you can actually run:
-use server;
-use web;
+use server::*;
+use web::*;
 
 fn main() {
   port = 18741;

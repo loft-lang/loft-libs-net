@@ -23,7 +23,7 @@
 //   v5-t4c: phase-B drained=<n> first_seen=<id> last_seen=<id>
 //   v5-t4c: ok last_session=<n>
 
-use web;
+use web::*;
 
 // LE u32 read at byte offset `off` of `buf` (mirrors t2 client).
 fn read_u32_le(buf: text, off: integer) -> integer {

@@ -18,7 +18,7 @@
 //   cargo run --release --bin loft -- --interpret \
 //       lib/game_protocol/examples/tictactoe_server.loft
 
-use server;
+use server::*;
 
 // ── Namespace handler registry ────────────────────────────────
 // A small in-main-loop hash that hands out integer ids for

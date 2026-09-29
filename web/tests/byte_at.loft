@@ -11,7 +11,7 @@
 // — NOT 0, which is a byte a binary frame legitimately carries; see
 // `test_byte_at_out_of_range` below and @WEB-002.
 
-use web;
+use web::*;
 
 fn test_byte_at_ascii() {
   s = "ABC";

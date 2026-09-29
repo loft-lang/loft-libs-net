@@ -18,8 +18,8 @@
 //   v5-t1: echoed
 //   v5-t1: done
 
-use server;
-use web;
+use server::*;
+use web::*;
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");

@@ -12,7 +12,7 @@
 // HTTP examples live in tests-network/ and are not run here.  @WEB-003 is the
 // interesting case — the contract it pins is precisely that a DOWN server is not an
 // error, so having no server is what makes it demonstrable.
-use web;
+use web::*;
 
 // @WEB-001 — the pack builder exists because interpolation cannot carry a zero byte.
 // Loft `text` is a UTF-8 byte buffer and codepoint 0 is the `character` null sentinel,

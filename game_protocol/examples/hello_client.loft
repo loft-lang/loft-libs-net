@@ -19,7 +19,7 @@
 //   cargo run --release --bin loft -- \
 //       lib/game_protocol/examples/hello_client.loft
 
-use web;
+use web::*;
 
 fn main() {
   println("client start");

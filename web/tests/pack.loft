@@ -5,7 +5,7 @@
 // without touching the network.  The network-dependent HTTP
 // tests live in tests-network/http.loft and are not run in CI.
 
-use web;
+use web::*;
 
 fn test_pack_u8_roundtrip() {
   web::pack_reset();

@@ -21,8 +21,8 @@
 //   v5-t4: catch_up cid=<n> from=<n>
 //   ...
 
-use server;
-use web;
+use server::*;
+use web::*;
 
 H_SUBSCRIBE = 1;
 H_CATCH_UP  = 2;

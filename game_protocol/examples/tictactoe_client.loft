@@ -9,7 +9,7 @@
 //   cargo run --release --bin loft -- --interpret \
 //       lib/game_protocol/examples/tictactoe_client.loft
 
-use web;
+use web::*;
 
 // ── Namespace handler registry (server-arbited) ──────────────
 // Populated from the MAP frame the server sends after upgrade.

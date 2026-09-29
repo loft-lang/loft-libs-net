@@ -13,7 +13,7 @@
 // helper already answered — not the bytes that reach a client.  That is on purpose: the
 // decision is the half a caller gets wrong, and it is the half a single-process test can
 // hold honestly.  The wire itself stays the integration suite's job.
-use server;
+use server::*;
 
 // @SRV-002 — `header` reads the wire, not your spelling of it.  HTTP header names are
 // case-insensitive and a client picks its own casing, so a caller comparing
