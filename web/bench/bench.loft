@@ -18,7 +18,7 @@
 //
 // Each repetition feeds different VALUES (a salt in the packed bytes, a rotated read
 // offset) through the same amount of work, and folds its result into `sink`.
-use web;
+use web::*;
 
 /// One measured routine.
 struct Row {

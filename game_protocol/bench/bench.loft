@@ -18,7 +18,7 @@
 // the hash covers every field but the timestamp; the timestamp is folded into `sink`.
 // Every op starts its sequence numbers at `r & 1` — a value, never the amount of work — so
 // no backend can hoist an op out of the repetition loop.
-use game_protocol;
+use game_protocol::*;
 
 /// One measured routine.
 struct Row {
