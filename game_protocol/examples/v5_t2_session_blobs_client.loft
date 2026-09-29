@@ -16,7 +16,7 @@
 //   v5-t2c: applied session=8 blobs=1
 //   v5-t2c: ok
 
-use web;
+use web::*;
 
 // Decode a 32-bit little-endian unsigned integer starting at byte
 // offset `off` of `buf`.  Returns -1 on out-of-range; valid u32

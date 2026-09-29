@@ -28,8 +28,8 @@
 //   ...
 //   v5-t3: done
 
-use server;
-use web;
+use server::*;
+use web::*;
 
 // Per-client registration: track the label they sent so we can log
 // each broadcast.  Server prints one "broadcast hello from <L>"

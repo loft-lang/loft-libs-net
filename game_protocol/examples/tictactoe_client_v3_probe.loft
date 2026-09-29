@@ -24,7 +24,7 @@
 //   v3-probe: gameover X
 //   v3-probe: ok
 
-use web;
+use web::*;
 
 // Drain the next non-null message from the handler with a short
 // timeout.  Returns null on timeout.  Both exit paths use an

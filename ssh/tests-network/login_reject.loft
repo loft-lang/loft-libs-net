@@ -5,7 +5,7 @@
 // handshake succeeds, and a bad password is rejected.  Verifies the connect +
 // auth path end-to-end without needing valid credentials.  Requires sshd on
 // 127.0.0.1:22 (skip elsewhere).
-use ssh;
+use ssh::*;
 
 fn main() {
   s = ssh::connect("127.0.0.1", 22);

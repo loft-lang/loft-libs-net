@@ -4,7 +4,7 @@
 // Gate test: connecting to a closed port must fail (not panic, not hang), and
 // the library must load + call through the native FFI on both the interpreter
 // and --native.  No sshd or credentials required.
-use ssh;
+use ssh::*;
 
 fn main() {
   s = ssh::connect("127.0.0.1", 1);

@@ -18,7 +18,7 @@
 // papered over: the contracts worth teaching here are what a call answers when
 // the other end is NOT there, and having no server is what makes them
 // demonstrable.
-use web;
+use web::*;
 
 fn main() {
   a_request_that_cannot_reach_anything();

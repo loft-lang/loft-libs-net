@@ -30,7 +30,7 @@
 //   v5-t5: tick=46 cells=0           # centre cascaded
 //   v5-t5: ok
 
-use world;
+use world::*;
 
 BASE_LIFETIME    = 10;
 NEIGHBOUR_LEASE  = 10;

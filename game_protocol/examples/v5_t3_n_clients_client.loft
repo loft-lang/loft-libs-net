@@ -15,7 +15,7 @@
 //   v5-t3c[<label>]: welcome seat=<n>
 //   v5-t3c[<label>]: ok received=<n>
 
-use web;
+use web::*;
 
 H_HELLO = 1;
 H_WELCOME = 2;

@@ -12,7 +12,7 @@
 //   cargo run --release --bin loft -- \
 //       lib/game_protocol/examples/hello_server.loft
 
-use server;
+use server::*;
 
 fn main() {
   srv = server::listen(7878);

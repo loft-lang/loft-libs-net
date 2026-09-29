@@ -1,6 +1,6 @@
 [package]
 name = "ssh"
-version = "0.1.1"
+version = "0.1.2"
 description = "SSH client for loft — drive an interactive remote shell (e.g. attach tmux) over password auth, never stored. Native-only."
 loft = ">=0.8"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for

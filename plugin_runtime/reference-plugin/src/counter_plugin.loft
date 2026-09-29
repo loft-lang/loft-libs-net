@@ -19,7 +19,7 @@
 //   * snapshot = the same 8 bytes as state (a counter's state IS its snapshot).
 //   * render   = ASCII decimal text of the total (what the host UI shows).
 
-use plugin_abi;
+use plugin_abi::*;
 
 // --- the six ABI functions, as free functions over byte buffers ---
 

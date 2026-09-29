@@ -21,8 +21,8 @@
 //   v5-t2: sent session=8 blobs=1
 //   v5-t2: done
 
-use server;
-use web;
+use server::*;
+use web::*;
 
 const TYPE_DELTA = 2;
 
