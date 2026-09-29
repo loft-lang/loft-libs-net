@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @C84 — `server` is transport primitives, and a framework is a SEPARATE library over it.
+//
+// loft's DESIGN_DECISIONS.md C84 (amended 2026-09-29): `server` answers requests and runs
+// WebSockets — `listen` (TLS included), `next`, `respond*`, the WebSocket calls and the event
+// pump.  A route table, middleware, authentication, sessions and certificate automation are
+// each library-sized and live ABOVE `server` (loft's WEB_STACK.md: `webapp`, `auth`, `acme`,
+// `sql`), so a program that only answers requests never carries their dependencies.
+//
+// This reads the package's own public surface and fails on any name outside the transport
+// set below.  A new primitive is added to that set on purpose — the edit is the review, and
+// the question to ask is whether it moves or answers bytes (`reload_tls` would) or decides
+// what a request means (a router, a login, a session would not).
+//
+// @falsified-at: hand-measured (2026-09-29) — a scratch copy of this package with
+//   `pub struct Session` and `pub fn route` appended fails with "…above it (webapp, auth,
+//   acme): Session route"; the `seen > 30` control failed first when the path was wrong
+//   (0 names read), so a surface this cannot read cannot pass.  Both backends.
+
+fn primitive(name: text) -> boolean {
+  set = [
+    "Server", "WebSocket", "Request", "WsEvent",
+    "listen", "try_listen", "listen_on", "try_listen_on", "listen_tls", "try_listen_tls",
+    "try_listen_tls_on", "bound", "next", "next_nonblocking", "close",
+    "respond", "respond_typed", "respond_bytes", "respond_with_headers", "respond_html",
+    "respond_css", "respond_js", "respond_loft", "respond_404", "header", "cors_headers",
+    "serve_range", "serve_data",
+    "ws_upgrade", "send", "send_binary", "last_opcode",
+    "run", "poll_event", "send_to", "broadcast", "disconnect",
+  ];
+  for p in set {
+    if p == name { return true; }
+  }
+  false
+}
+
+fn test_server_exports_only_transport_primitives() {
+  outside = "";
+  seen = 0;
+  for l in file("../src/server.loft").lines() {
+    for kw in ["pub fn ", "pub struct ", "pub enum ", "pub type "] {
+      if l.starts_with(kw) {
+        rest = l[len(kw)..];
+        stop = len(rest);
+        for c in ["(", " ", "<", "{{", ";"] {
+          at = rest.find(c) ?? stop;
+          if at < stop { stop = at; }
+        }
+        name = rest[..stop];
+        seen += 1;
+        if !primitive(name) { outside += " {name}"; }
+      }
+    }
+  }
+  assert(seen > 30, "read the surface: {seen} public names in ../src/server.loft");
+  assert(
+    outside == "",
+    "C84: `server` is transport primitives; these belong in a library above it (webapp, auth, acme):{outside}"
+  );
+}
