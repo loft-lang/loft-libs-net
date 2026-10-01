@@ -55,36 +55,28 @@ fn build_cache(n: integer) -> Cache {
   c
 }
 
-fn send_session(srv: server::Server, cid: integer, s: Session) -> boolean {
+fn send_session(cid: integer, s: Session) -> boolean {
   web::pack_reset();
   web::pack_u8(TYPE_DELTA);
   web::pack_u32_le(s.s_id);
   web::pack_u8(s.s_color);
   web::pack_u8(s.s_height);
   web::pack_u16_le(s.s_age);
-  // Multi-client send_to is text-framed only today — for binary
-  // we drop to the per-slot native send_binary helper that the
-  // single-client path also uses (slot ids are interchangeable
-  // across the two surfaces).
-  ws_send_binary_to_native(cid, web::pack_take())
+  // Multi-client send_to is text-framed only.  A client id IS the
+  // WebSocket slot id (server's send_to passes it straight through),
+  // so the binary frame goes out through that socket's send_binary.
+  server::WebSocket { ws_id: cid }.send_binary(web::pack_take())
 }
 
-// Bridge: lib/server's multi-client API exposes send_to (text only)
-// but the underlying slot tables are shared with the binary surface
-// — same WS_CONNS table.  Routing through the per-slot binary fn
-// reuses the existing path with no new infrastructure.
-fn ws_send_binary_to_native(handle: integer, msg: text) -> boolean;
-#native "n_ws_send_binary"
-
-fn handle_subscribe(srv: server::Server, cache: Cache, cid: integer, payload: text) {
-  upto = payload as integer;
+fn handle_subscribe(cache: Cache, cid: integer, payload: text) {
+  upto = payload as integer ?? 0;
   if upto < 1 { upto = 1; }
   if upto > cache.total { upto = cache.total; }
   println("v5-t4: subscribe cid={cid} upto={upto}");
   for hi in 1..=upto {
     s = cache.by_id[hi];
     if !s { continue; }
-    if !send_session(srv, cid, s) {
+    if !send_session(cid, s) {
       println("v5-t4: send-failed cid={cid} sid={hi}");
       return;
     }
@@ -92,14 +84,14 @@ fn handle_subscribe(srv: server::Server, cache: Cache, cid: integer, payload: te
   }
 }
 
-fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: text) {
-  from = payload as integer;
+fn handle_catch_up(cache: Cache, cid: integer, payload: text) {
+  from = payload as integer ?? 0;
   if from < 0 { from = 0; }
   println("v5-t4: catch_up cid={cid} from={from}");
   for cj in (from + 1)..=cache.total {
     s = cache.by_id[cj];
     if !s { continue; }
-    if !send_session(srv, cid, s) {
+    if !send_session(cid, s) {
       println("v5-t4: send-failed cid={cid} sid={cj}");
       return;
     }
@@ -109,9 +101,9 @@ fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: tex
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18094 } else { port_raw as integer };
+  port = port_raw as integer ?? 18094;
   total_raw = env_variable("LOFT_T4_SESSIONS");
-  total = if total_raw == "" { 5 } else { total_raw as integer };
+  total = total_raw as integer ?? 5;
 
   srv = server::listen(port);
   if srv.handle < 0 {
@@ -124,9 +116,9 @@ fn main() {
   srv.run(fn(ev: server::WsEvent) {
     if ev.message {
       if ev.msg_id == H_SUBSCRIBE {
-        handle_subscribe(srv, cache, ev.cid, ev.payload);
+        handle_subscribe(cache, ev.cid, ev.payload);
       } else if ev.msg_id == H_CATCH_UP {
-        handle_catch_up(srv, cache, ev.cid, ev.payload);
+        handle_catch_up(cache, ev.cid, ev.payload);
       }
     }
   });

@@ -31,7 +31,7 @@ use web::*;
 // explicit `return` so the parser accepts the loop-then-fallthrough
 // shape (a bare trailing `null` literal infers as `null`, not
 // `text`, which `-> text` then rejects).
-fn next_msg(h: web::WsHandler) -> text {
+fn next_msg(h: web::WsHandler) -> text? {
   attempts = 0;
   while attempts < 400 {
     raw = h.try_recv();
@@ -46,7 +46,7 @@ fn next_msg(h: web::WsHandler) -> text {
 // returning the trailing payload (the bit after the prefix).  On
 // any failure prints a diagnostic and returns null.
 fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
-                     want_prefix: text) -> text {
+                     want_prefix: text) -> text? {
   ok = h.send("click:{r},{c}");
   if !ok {
     web::sleep_ms(100);
@@ -70,7 +70,7 @@ fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  port = port_raw as integer ?? 7878;
   url = "ws://127.0.0.1:{port}/ws";
 
   println("v3-probe: connecting port={port}");
@@ -88,7 +88,7 @@ fn main() {
   }
   println("v3-probe: place X 0,0");
   o = next_msg(h);
-  if o == null || !o.starts_with("place:O,") {
+  if !(o ?? "").starts_with("place:O,") {
     println("v3-probe: missing-O-after-X-1 got=\"{o}\"");
     h.close();
     return;
@@ -104,7 +104,7 @@ fn main() {
   }
   println("v3-probe: place X 1,0");
   o = next_msg(h);
-  if o == null || !o.starts_with("place:O,") {
+  if !(o ?? "").starts_with("place:O,") {
     println("v3-probe: missing-O-after-X-2 got=\"{o}\"");
     h.close();
     return;
@@ -120,7 +120,7 @@ fn main() {
   }
   println("v3-probe: place X 2,0");
   game = next_msg(h);
-  if game == null || !game.starts_with("gameover:") {
+  if !(game ?? "").starts_with("gameover:") {
     println("v3-probe: missing-gameover got=\"{game}\"");
     h.close();
     return;

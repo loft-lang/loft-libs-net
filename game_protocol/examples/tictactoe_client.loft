@@ -28,8 +28,7 @@ fn install(reg: Registry, name: text, id: integer) {
 }
 
 fn lookup_id(reg: Registry, name: text) -> integer {
-  if !reg.by_name[name] { return -1; }
-  reg.by_name[name].id
+  reg.by_name[name].id ?? -1
 }
 
 // Parse "Click=0,Placement=1,GameOver=2" into the registry.
@@ -47,9 +46,11 @@ fn install_map(reg: Registry, payload: text) {
     eq = entry.find("=");
     if eq != null {
       n = entry[..eq];
-      v = entry[eq + 1..] as integer;
-      install(reg, n, v);
-      println("learned: {n}={v}");
+      v = entry[eq + 1..] as integer ?? -1;
+      if v >= 0 {
+        install(reg, n, v);
+        println("learned: {n}={v}");
+      }
     }
   }
 }
@@ -63,7 +64,7 @@ fn pack(id: integer, payload: text) -> text {
 fn parse_id(raw: text) -> integer {
   i = raw.find(":");
   if i == null { return -1; }
-  raw[..i] as integer
+  raw[..i] as integer ?? -1
 }
 
 fn parse_payload(raw: text) -> text {

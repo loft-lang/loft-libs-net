@@ -162,13 +162,13 @@ fn handle_request(req: server::Request) {
 // ── Game state (v1-style single-game per WS session) ───────────────
 
 struct Game {
-  cells:  vector<text>,    // 9 entries; null = empty, "X" / "O" placed
+  cells:  vector<text?>,   // 9 entries; null = empty, "X" / "O" placed
   turn:   integer,         // moves played so far
-  winner: text             // null until set; then "X" / "O" / "draw"
+  winner: text?            // null until set; then "X" / "O" / "draw"
 }
 
 fn new_game() -> Game {
-  cs: vector<text> = [];
+  cs: vector<text?> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: null }
 }
@@ -182,7 +182,7 @@ fn cell_empty(g: Game, idx: integer) -> boolean {
 fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
   a = g.cells[i];
   if a != null && a == g.cells[j] && a == g.cells[k] {
-    return a;
+    return a ?? "";
   }
   ""
 }
@@ -233,8 +233,8 @@ fn handle_ws_session(ws: server::WebSocket) {
       println("v3-game: malformed click \"{msg}\"");
       continue;
     }
-    r = body[..comma] as integer;
-    c = body[comma + 1..] as integer;
+    r = body[..comma] as integer ?? -1;
+    c = body[comma + 1..] as integer ?? -1;
     if r < 0 || r > 2 || c < 0 || c > 2 {
       println("v3-game: out-of-range click r={r} c={c}");
       continue;
@@ -276,7 +276,7 @@ fn handle_ws_session(ws: server::WebSocket) {
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  port = port_raw as integer ?? 7878;
 
   srv = server::listen(port);
   if srv.handle < 0 {

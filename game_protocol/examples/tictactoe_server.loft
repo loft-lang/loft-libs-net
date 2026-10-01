@@ -44,8 +44,7 @@ fn register(reg: Registry, name: text) -> integer {
 }
 
 fn lookup_id(reg: Registry, name: text) -> integer {
-  if !reg.by_name[name] { return -1; }
-  reg.by_name[name].id
+  reg.by_name[name].id ?? -1
 }
 
 // ── Wire frame helpers ────────────────────────────────────────
@@ -58,7 +57,7 @@ fn pack(id: integer, payload: text) -> text {
 fn parse_id(raw: text) -> integer {
   i = raw.find(":");
   if i == null { return -1; }
-  raw[..i] as integer
+  raw[..i] as integer ?? -1
 }
 
 fn parse_payload(raw: text) -> text {
@@ -70,14 +69,14 @@ fn parse_payload(raw: text) -> text {
 // ── Game state ────────────────────────────────────────────────
 
 struct Game {
-  cells: vector<text>,    // 9 entries; "" empty, "X" / "O" placed
+  cells: vector<text?>,   // 9 entries; null = empty, "X" / "O" placed
   turn: integer,           // count of moves made so far
   winner: text             // "" / "X" / "O" / "draw"
 }
 
 fn new_game() -> Game {
   // Empty cells are represented by null; the vector starts at len 9.
-  cs: vector<text> = [];
+  cs: vector<text?> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: "" }
 }
@@ -91,7 +90,7 @@ fn cell_empty(g: Game, idx: integer) -> boolean {
 fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
   a = g.cells[i];
   if a != null && a == g.cells[j] && a == g.cells[k] {
-    return a;
+    return a ?? "";
   }
   ""
 }
@@ -163,8 +162,8 @@ fn main() {
       // body is "row,col"
       comma = body.find(",");
       if comma == null { continue; }
-      r = body[..comma] as integer;
-      c = body[comma + 1..] as integer;
+      r = body[..comma] as integer ?? -1;
+      c = body[comma + 1..] as integer ?? -1;
       if r < 0 || r > 2 || c < 0 || c > 2 { continue; }
 
       idx = r * 3 + c;

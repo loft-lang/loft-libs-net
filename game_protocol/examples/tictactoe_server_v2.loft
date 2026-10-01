@@ -44,9 +44,9 @@ fn pack(id: integer, payload: text) -> text {
 // ── Game state ──────────────────────────────────────────────
 
 struct Game {
-  cells: vector<text>,
+  cells: vector<text?>,
   turn: integer,
-  winner: text
+  winner: text?
 }
 
 fn new_game() -> Game {
@@ -57,7 +57,7 @@ fn new_game() -> Game {
   // and ran into P220 — `""` round-tripping as `null` through
   // the struct's deep-copy.  P220 closed 2026-05-05 in
   // `Stores::copy_claims`; either sentinel now works.)
-  cs: vector<text> = [];
+  cs: vector<text?> = [];
   for _ in 0..9 { cs += [null]; }
   Game { cells: cs, turn: 0, winner: null }
 }
@@ -71,7 +71,7 @@ fn cell_empty(g: Game, idx: integer) -> boolean {
 fn line_winner(g: Game, i: integer, j: integer, k: integer) -> text {
   a = g.cells[i];
   if a != null && a == g.cells[j] && a == g.cells[k] {
-    return a;
+    return a ?? "";
   }
   ""
 }
@@ -123,9 +123,9 @@ fn send_placement_pair(
   // Tell the player about their own placement.
   srv.send_to(client_id, pack(h_placement, "{mark},{r},{c}"));
   // Tell the partner about it as a spectator update.
-  cs = state.ss_clients[client_id];
-  if cs.cs_partner >= 0 {
-    srv.send_to(cs.cs_partner, pack(h_spec_placement, "{mark},{r},{c}"));
+  partner = state.ss_clients[client_id].cs_partner ?? -1;
+  if partner >= 0 {
+    srv.send_to(partner, pack(h_spec_placement, "{mark},{r},{c}"));
   }
 }
 
@@ -138,9 +138,9 @@ fn send_gameover_pair(
   h_spec_gameover: integer
 ) {
   srv.send_to(client_id, pack(h_gameover, winner));
-  cs = state.ss_clients[client_id];
-  if cs.cs_partner >= 0 {
-    srv.send_to(cs.cs_partner, pack(h_spec_gameover, winner));
+  partner = state.ss_clients[client_id].cs_partner ?? -1;
+  if partner >= 0 {
+    srv.send_to(partner, pack(h_spec_gameover, winner));
   }
 }
 
@@ -160,7 +160,7 @@ fn maybe_shutdown_after_game_over(
 ) {
   cs = state.ss_clients[client_id];
   if !cs { return; }
-  partner_id = cs.cs_partner;
+  partner_id = cs.cs_partner ?? -1;
   if partner_id < 0 {
     send_shutdown(srv, client_id, "own-game-complete-no-partner", h_shutdown);
     log_info("shutdown sent to {client_id} (no partner)");
@@ -192,8 +192,8 @@ fn handle_click(
 
   comma = body.find(",");
   if comma == null { return; }
-  r = body[..comma] as integer;
-  c = body[comma + 1..] as integer;
+  r = body[..comma] as integer ?? -1;
+  c = body[comma + 1..] as integer ?? -1;
   if r < 0 || r > 2 || c < 0 || c > 2 { return; }
 
   idx = r * 3 + c;
@@ -315,7 +315,7 @@ fn main() {
   // don't collide on a single hardcoded port.  Default 7878
   // preserves the standalone-launch behaviour.
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  port = port_raw as integer ?? 7878;
   srv   = server::listen(port);
   println("v2 server listening on :{port}");
   log_info("v2 server listening on :{port}");

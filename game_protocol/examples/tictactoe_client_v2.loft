@@ -34,8 +34,7 @@ fn install(reg: Registry, name: text, id: integer) {
 }
 
 fn lookup_id(reg: Registry, name: text) -> integer {
-  if !reg.by_name[name] { return -1; }
-  reg.by_name[name].id
+  reg.by_name[name].id ?? -1
 }
 
 fn install_map(reg: Registry, payload: text) {
@@ -52,8 +51,8 @@ fn install_map(reg: Registry, payload: text) {
     eq = entry.find("=");
     if eq != null {
       n = entry[..eq];
-      v = entry[eq + 1..] as integer;
-      install(reg, n, v);
+      v = entry[eq + 1..] as integer ?? -1;
+      if v >= 0 { install(reg, n, v); }
     }
   }
 }
@@ -65,7 +64,7 @@ fn pack(id: integer, payload: text) -> text {
 fn parse_id(raw: text) -> integer {
   i = raw.find(":");
   if i == null { return -1; }
-  raw[..i] as integer
+  raw[..i] as integer ?? -1
 }
 
 fn parse_payload(raw: text) -> text {
@@ -161,7 +160,7 @@ fn main() {
   // ~200 ms; the single-client test leaves it unset (no delay).
   delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
   if delay_raw != "" {
-    sleep_ms(delay_raw as integer);
+    sleep_ms(delay_raw as integer ?? 0);
   }
 
   // Phase 2 — short warmup so a second client can join (3 polls).
@@ -171,7 +170,7 @@ fn main() {
     if raw != null {
       id = parse_id(raw);
       body = parse_payload(raw);
-      lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover);
+      lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover, h_shutdown);
       println("[{label}] (warmup) {lab}: {body}");
     }
     poll_count = poll_count + 1;
