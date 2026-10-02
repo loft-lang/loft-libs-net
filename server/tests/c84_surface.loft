@@ -40,7 +40,7 @@ fn test_server_exports_only_transport_primitives() {
   outside = "";
   seen = 0;
   for l in file("../src/server.loft").lines() {
-    for kw in ["pub fn ", "pub struct ", "pub enum ", "pub type "] {
+    for kw in ["pub fn ", "pub operator ", "pub struct ", "pub enum ", "pub type "] {
       if l.starts_with(kw) {
         rest = l[len(kw)..];
         stop = len(rest);
