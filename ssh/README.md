@@ -20,6 +20,7 @@ a synchronous, polling FFI, so no async leaks into loft.
 ```loft
 use ssh;
 
+// `read_password` and `feed_terminal` stand for your app's own input and terminal emulator.
 fn main() {
   s = ssh::connect("laptop.local", 42022);
   if !s.ok() { println("connect failed"); return; }
@@ -29,7 +30,7 @@ fn main() {
 
   while s.is_open() {
     out = s.recv();                       // non-blocking; "" when idle
-    for i in 0..len(out) {
+    for i in 0..out.size() {              // BYTES: `len` counts characters
       feed_terminal(ssh::byte_at(i, out));  // raw byte stream
     }
     // ... render, read input, s.send(keys), s.resize(cols, rows) ...
@@ -37,6 +38,8 @@ fn main() {
   s.close();
 }
 ```
+
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## API
 
@@ -56,10 +59,10 @@ fn main() {
 ## Security
 
 - **Password auth only** — no private key is read or stored.
-- **The server host key is currently accepted unconditionally.** The transport
-  is still encrypted, but a stored known-hosts (TOFU) check is a planned
-  hardening step (`native/src/session.rs::check_server_key`). Until then, use it
-  on networks you trust.
+- **The server host key is accepted unconditionally** — there is no known-hosts
+  check (`native/src/session.rs::check_server_key` answers true).  The transport is
+  encrypted, but nothing tells you the host is the one you meant, so use it on
+  networks you trust.
 
 ## Testing
 
