@@ -7,3 +7,4 @@ native-auto/
 **/native-auto/
 loft.lock
 */loft.lock
+*/bench/.build/
