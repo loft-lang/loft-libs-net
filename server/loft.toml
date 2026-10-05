@@ -2,7 +2,7 @@
 name = "server"
 version = "0.7.3"
 description = "HTTP + WebSocket server for loft — TCP sockets + tungstenite via cdylib."
-loft = ">=2026.11.0"
+loft = ">=2026.10.20261002"
 api_compatible_with  = "0.7.0"   # four returns now declare `τ?`: a DECLARED non-null binding of one stops compiling
 data_compatible_with = "0.3.1"   # oldest own release whose stored data this reads
 repository = "loft-libs-net"

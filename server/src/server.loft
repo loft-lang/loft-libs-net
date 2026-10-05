@@ -44,14 +44,20 @@
 
 // --- Types (must come before all functions) ---
 
+// A listening server, as a native socket handle.  `listen` opens one (`listen_on`,
+// `listen_tls` and the `try_` forms too), and `next` waits for its next request.
 pub struct Server {
   handle: integer
 }
 
+// An upgraded WebSocket connection, as a native handle.  `ws_upgrade` makes one from the
+// current request; `next` reads a message and `send` writes one.
 pub struct WebSocket {
   ws_id: integer
 }
 
+// One HTTP request: its method, path and body, and its headers as `Key: Value` lines.
+// `next` on a `Server` answers one, and `respond` or one of its variants answers it.
 pub struct Request {
   method: text,
   path: text,

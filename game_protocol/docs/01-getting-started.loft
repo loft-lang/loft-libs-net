@@ -1,0 +1,92 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Build a game message, put it on the wire as JSON text, and read it back on the other side.
+//
+// `game_protocol` is the shared vocabulary a game's client and server agree on: a `MsgType`
+// naming what a message is (state sync, player input, chat, ping, …), a `WsMessage` carrying
+// that type and a text payload, and a `GameEnvelope` around it with the sender, a recipient, a
+// sequence number and a timestamp.  The `msg_*` constructors build the common ones.
+//
+// It does NOT move bytes: the transport — a WebSocket from `web`, a server loop from `server`,
+// anything that carries text — is the program's.  What both ends need is the same types, which
+// is what this package is, and loft's own JSON formatting puts an envelope on the wire.
+use game_protocol::*;
+
+fn main() {
+  hello = msg_chat("alice", "hi there");
+  println("type {hello.message.msg_type}, from {hello.sender}: {hello.message.payload}");
+  assert(hello.message.msg_type == MsgType.ChatMessage && hello.sender == "alice", "a chat from alice");
+  assert(hello.timestamp > 0, "stamped with now() when it was built");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  on_the_wire();
+  answering_by_type();
+  ping_and_pong();
+}
+
+// That prints:
+//
+//     type ChatMessage, from alice: hi there
+//
+// ## On the wire
+//
+// Format an envelope with `:j` and it is JSON text, ready for any transport; on the other side,
+// `GameEnvelope.parse(text)` reads it back into the same structure.  The payload is text too —
+// a game decides what goes in it (a move, a serialized state, a line of chat).
+
+fn on_the_wire() {
+  out = msg_input("player1", "move:left");
+  out.timestamp = 0;  // pinned, so the text below is exact
+  wire = "{out:j}";
+  assert(wire == "{{\"sender\":\"player1\",\"recipient\":\"\",\"sequence\":0,\"timestamp\":0,\"message\":{{\"msg_type\":{{\"PlayerInput\":{{}}}},\"payload\":\"move:left\"}}}}",
+         "the envelope as JSON text");
+  got = GameEnvelope.parse(wire);
+  assert(got.sender == "player1" && got.message.payload == "move:left", "read back");
+  assert(got.message.msg_type == MsgType.PlayerInput, "and its type with it");
+  println("wire    : {len(wire)} bytes of JSON, read back as a PlayerInput");
+}
+
+// ## Answering by type
+//
+// A receiver dispatches on `message.msg_type`.  `match` over `MsgType` names every kind the
+// protocol has, so a new kind added to the enum shows up as a match that no longer covers it.
+
+fn kind_of(e: const GameEnvelope) -> text {
+  match e.message.msg_type {
+    StateFullSync | StateDelta => "state",
+    PlayerInput => "input",
+    Ping | Pong => "liveness",
+    ChatMessage => "chat",
+    LobbyJoin | LobbyLeave | LobbyList | MatchStart | MatchEnd => "lobby",
+    Error => "error"
+  }
+}
+
+fn answering_by_type() {
+  assert(kind_of(msg_state("score:42")) == "state", "a full sync");
+  assert(kind_of(msg_error("bad move")) == "error", "an error");
+  assert(kind_of(msg_chat("bob", "gg")) == "chat", "a chat line");
+  println("match   : state, error, chat — one arm per kind");
+}
+
+// ## Ping and pong
+//
+// `msg_ping(seq)` and `msg_pong(seq)` carry a sequence number, so a client can pair the answer
+// with the question it sent and measure the round trip from the two timestamps.  The other
+// constructors leave `sequence` at 0 and `recipient` empty: numbering and routing a game's own
+// messages are the game's to set on the envelope.
+
+fn ping_and_pong() {
+  ping = msg_ping(7);
+  pong = msg_pong(ping.sequence);
+  assert(pong.sequence == 7 && pong.message.msg_type == MsgType.Pong, "the answer to ping 7");
+  assert(msg_chat("a", "b").sequence == 0, "a chat is not numbered");
+  println("ping    : pong {pong.sequence} answers ping {ping.sequence}");
+}
+
+// ## Where to go next
+//
+// - `examples/` — `hello_client` / `hello_server`, then a tic-tac-toe client and server: the
+//   same envelopes carried over `web`'s WebSocket and `server`'s loop.

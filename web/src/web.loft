@@ -109,7 +109,7 @@ pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse {
 // Read the byte range [offset, offset+len) of a remote file via a Range
 // request. Returns status 206 (Partial Content) with the raw bytes in `body`
 // when the server honours ranges; a server that ignores Range returns 200 with
-// the full body. Read the bytes with `byte_at(response.body, i)`.
+// the full body. Read the bytes with `byte_at(i, response.body)`.
 pub fn http_get_range(url: text, offset: integer, len: integer) -> HttpResponse {
   last = offset + len - 1;
   status = http_do("GET", url, "", "Range: bytes={offset}-{last}");
@@ -165,21 +165,12 @@ pub fn http_size(url: text) -> integer {
 // connect at registration time, auto-reconnect on transient failure
 // (exponential backoff capped at 10 seconds), close on `close()`.
 //
-// The `pump` closure is passed in per call rather than stored in the
-// `WsHandler` struct — that's the workaround for the layout limit on
-// closure-in-struct-field captures (PROBLEMS.md § 213).  Once full
-// closure support lands, `on_message` will move into the struct so
-// it can be registered once at `ws_handler` time.  The architecture
-// validated here is the one the eventual API targets; only the
-// "where does the closure live" detail changes.
-//
-// State pattern: the closure typically captures a `Reference<T>` to
-// state held in a Store (the "store with a fixed pointer" workaround
-// — the pointer is snapshotted at capture time, and the record it
-// points at remains mutable through the pointer).  This makes the
-// per-message handler look identical to the future direct-capture
-// style.
+// `pump` takes its callback per call, so a handler holds no closure: the
+// callback typically captures a `Reference<T>` to state held in a store, and
+// updates that state through it for each message.
 
+// An open WebSocket session, from `ws_handler`.  It is a slot number on the
+// native side; the connection behind it reconnects on its own.
 pub struct WsHandler {
   id: integer            // Rust-side connection slot
 }
@@ -228,19 +219,15 @@ fn ws_client_close_native(handle: integer);
 // well-formed `ws://...` or `wss://...` URL.
 //
 // `wss://` (TLS) works on BOTH targets: the browser uses the platform
-// WebSocket (which has always spoken wss), and since web 0.3.2 the
-// native client dials TLS through rustls with certificate validation
-// ON by default (default port 443).  For a self-signed dev endpoint,
+// WebSocket, and the native client dials TLS through rustls with
+// certificate validation ON by default (default port 443).  For a self-signed dev endpoint,
 // set `LOFT_WS_INSECURE_SKIP_VERIFY=1` in the native process — an
 // explicit opt-out, never a URL option, so it cannot be baked into a
 // deployed config by accident.
 // Example: @WEB-003 — a handle is not a connection; ask the traffic, not the handle.
 //
-// ⚠ The return is `WsHandler?` and not `WsHandler`, because null is the whole
-// point of the call: it is the one distinction this function exists to make.
-// It used to be declared non-null, which meant the compiler called the
-// `== null` test the contract asks for redundant — the signature denied the
-// only thing it had to say.
+// ⚠ The return is `WsHandler?` because null is the one distinction this call
+// exists to make: test it with `== null`.
 pub fn ws_handler(url: text) -> WsHandler? {
   id = ws_client_connect_native(url);
   if id < 0 { return null; }
@@ -256,8 +243,8 @@ pub fn send(self: WsHandler, msg: text) -> boolean {
 }
 
 // Send `msg` as a binary WebSocket frame (opcode 2).  Loft `text`
-// is a byte buffer — pack u8/u16/i32/etc. into it via `to_bytes`
-// style code, then ship it.  Returns true on success; false means
+// is a byte buffer — build it with `pack_reset` / `pack_u8` / … /
+// `pack_take`, then ship it.  Returns true on success; false means
 // the connection is currently in backoff / reconnecting.
 pub fn send_binary(self: WsHandler, msg: text) -> boolean {
   ws_client_send_binary_native(self.id, msg)
@@ -300,13 +287,13 @@ pub fn close(self: WsHandler) {
 }
 
 // Block the calling thread for `ms` milliseconds.  Convenience for
-// tests and pacing loops; non-positive values are a no-op.  Not
-// available on the WASM target — the host event loop is the
-// equivalent.
+// tests and pacing loops; non-positive values are a no-op.  In the
+// browser it returns at once — the host event loop paces there, so
+// call `frame_yield` instead.
 pub fn sleep_ms(ms: integer);
 #native
 
-// --- Binary buffer construction (TTT v5 + plan-36) ---
+// --- Binary buffer construction ---
 //
 // Loft `text` is a UTF-8 byte buffer; a NUL byte (codepoint 0) is the
 // `character` null sentinel, so a `text` built via `"{c}{c}…"`
@@ -323,7 +310,7 @@ pub fn sleep_ms(ms: integer);
 // returned `text` lives until the next `pack_take()`, so `send_binary`
 // it (or copy it) before reusing the builder.
 //
-// On the receive side, `byte_at(t, i)` returns the single byte at
+// On the receive side, `byte_at(i, t)` returns the single byte at
 // offset `i` of `t` (regardless of UTF-8 interpretation).  Use it to
 // decode binary frames returned by `try_recv` / `pump` field-by-field.
 
@@ -332,17 +319,16 @@ pub fn sleep_ms(ms: integer);
 pub fn pack_reset();
 #native
 
-// Append a single byte to the pack buffer.  `b` is masked to 8 bits.
+// Append a single byte to the pack buffer: the low 8 bits of `b`.
 pub fn pack_u8(b: integer);
 #native
 
-// Append a 2-byte little-endian unsigned value.
+// Append the low 16 bits of `v`, little-endian.
 pub fn pack_u16_le(v: integer);
 #native
 
-// Append a 4-byte little-endian unsigned value.  Loft `integer` is
-// i32 — bit-cast to u32 to preserve the LE byte pattern across the
-// sign boundary.
+// Append the low 32 bits of `v`, little-endian — so -1 packs as
+// FF FF FF FF, the same bytes as 0xFFFFFFFF.
 pub fn pack_u32_le(v: integer);
 #native
 
@@ -354,9 +340,8 @@ pub fn pack_take() -> text;
 
 // Read the byte at `idx` of the text payload.  Out-of-range (negative
 // or past the end) returns -1.  Use to decode binary frames received
-// via `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI
-// auto-marshal in src/extensions.rs supports (I32, Text) -> I32 but
-// not (Text, I32) -> I32.
+// via `try_recv` / `pump`.  Argument order is (idx, t), unlike the
+// (text, index) order elsewhere.
 // Example: @WEB-002 — why the bounds test is `< 0` and never `== 0`.
 pub fn byte_at(idx: integer, t: text) -> integer;
 #native
@@ -369,20 +354,28 @@ pub fn byte_at(idx: integer, t: text) -> integer;
 // after one short timeout, so N idle sockets cost one timeout total
 // instead of N timeouts.
 //
-//   group = web::ws_group()
-//   group.add(h1)
-//   group.add(h2)
-//   while true {
-//     ev = group.poll()
-//     if ev.handle < 0 { break }
+//   group = web::ws_group();
+//   group.add(h1);
+//   group.add(h2);
+//   for _ in 0..1000 {
+//     ev = group.poll();
+//     if ev.handle < 0 { break; }
 //     // ev.message has the data
 //   }
+//
+// The group's list lives on the native side and there is one per thread:
+// `ws_group()` empties it, so a second group replaces the first.  In the
+// browser `poll` always answers -1: receive with each handler's `try_recv`
+// there.
 
+// What one `poll` found: the handler slot that had a message and the
+// message, or `handle == -1` and "" when none had.
 pub struct WsGroupEvent {
   handle: integer,
   message: text
 }
 
+// A set of handlers to receive from in one scan; see above.
 pub struct WsGroup {
   _dummy: integer   // no state on loft side; Rust owns the list
 }
@@ -420,8 +413,8 @@ pub fn poll(self: WsGroup) -> WsGroupEvent {
   WsGroupEvent { handle: h, message: ws_client_message_native() }
 }
 
-// Yield one frame to the host event loop (@PLN84 ZT-C); native no-op,
-// browser asyncify suspend (loft_web.ws_yield).  Call once per WS poll
+// Yield one frame to the host event loop: a no-op natively, and in the
+// browser the suspend point that lets the event loop run.  Call once per WS poll
 // iteration so the browser event loop can deliver WebSocket messages.
 pub fn frame_yield();
 #native "n_yield_frame"

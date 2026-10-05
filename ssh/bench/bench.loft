@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass for `byte_at`, the one routine of this library that runs
+// without a network: a terminal stream is read one byte at a time, and every byte is one
+// call into the native crate.  Timed on a fixed workload with a hash of what it read.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     bench/.build/stats_rs [--n N]                     the pure-Rust twin (bench/bench.rs)
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, bytes per op
+// (`px`), ns per byte, and an FNV-1a-32 hash of the output.  The callee is one indexed
+// load, so `ns_px` is the cost of ONE crossing; the Rust twin runs the callee's body with
+// no crossing at all, and the hash says both lanes read the same bytes.
+//
+// Each repetition reads the buffer from a different rotated start — different VALUES,
+// the same amount of work — and folds its result into `sink`.
+use ssh::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+/// FNV-1a-32 over the raw bytes of a text, read with the STANDARD LIBRARY's `byte_at`, so
+/// the hash of the buffer does not lean on the routine under test.
+fn fnv_text(h0: integer, t: text) -> integer {
+  ft_h = h0;
+  for ft_i in 0..size(t) {
+    ft_h = ((ft_h ^ t.byte_at(ft_i)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  ft_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── Receive side: one crossing per byte ─────────────────────────────
+
+const BA_SIZE = 1048576;
+
+/// The 1 MiB buffer a `recv` could answer: 7-bit bytes, NUL included.
+fn stream_buffer() -> text {
+  sb_v: vector<u8> = [];
+  for sb_k in 0..BA_SIZE { sb_v += [((sb_k * 131 + (sb_k >> 8) * 7) & 127) as u8]; }
+  text_from_bytes(sb_v)
+}
+
+/// One op: one full read of the buffer from a rotated start, every byte read with
+/// `byte_at` and folded into a polynomial hash so each one counts.
+fn read_stream(buf: text, salt: integer) -> integer {
+  rs_acc = 0;
+  rs_off = salt * 4099;
+  for rs_i in 0..BA_SIZE {
+    rs_acc = (rs_acc * 31 + ssh::byte_at((rs_i + rs_off) & 1048575, buf)) & 0xFFFFFFFF;
+  }
+  rs_acc
+}
+
+fn bench_byte_at(n: integer) -> Row {
+  bb_buf = stream_buffer();
+  bb_t0 = ticks();
+  bb_sink = 0;
+  for bb_r in 0..n {
+    bb_sink += read_stream(bb_buf, bb_r);
+  }
+  bb_us = ticks() - bb_t0;
+  bb_one: vector<integer> = [read_stream(bb_buf, 0), size(bb_buf), fnv_text(FNV_OFFSET, bb_buf)];
+  Row { name: "byte_at", iters: n, us: bb_us, px: BA_SIZE, hash: fnv(FNV_OFFSET, bb_one),
+        sink: bb_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  print_row(bench_byte_at(mn_n));
+}

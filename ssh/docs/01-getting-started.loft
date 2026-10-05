@@ -1,0 +1,88 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Connect to an SSH host, log in with a password, run a shell, and read its output as bytes.
+//
+// `ssh` drives an interactive remote shell — attaching `tmux` from a terminal app, say.  A
+// session goes through one ladder: `connect` (TCP and the SSH handshake), `ok()`, `login` with
+// a password, `open_shell` with a terminal size, then a loop of `send` and `recv` until
+// `is_open()` turns false.  Every call is blocking or polling; nothing is async.
+//
+// This guide needs no SSH server: it connects to a port nothing listens on, which is the case
+// a program must handle first anyway.  Point `run_session` at a host you can log into for the
+// real thing.  It runs on the interpreter and `--native`; a browser cannot open a raw socket.
+use ssh::*;
+
+// The whole ladder.  It answers what went wrong, or "" when the shell ran until it closed.
+fn run_session(host: text, port: integer, user: text, password: text) -> text {
+  s = ssh::connect(host, port);
+  if !s.ok() { return "connect failed"; }
+  if !s.login(user, password) { s.close(); return "login refused"; }
+  if !s.open_shell("xterm-256color", 80, 24) { s.close(); return "no shell"; }
+  s.send("echo hello; exit\n");
+  while s.is_open() {
+    out = s.recv();   // "" while nothing is pending: a real loop draws a frame here
+    for i in 0..out.size() { print_byte(ssh::byte_at(i, out)); }
+  }
+  s.close();
+  ""
+}
+
+fn print_byte(_b: integer) {}
+
+fn main() {
+  // Port 1 is privileged and unbound, so the connection is refused.
+  answer = run_session("127.0.0.1", 1, "me", "secret");
+  println("session: {answer}");
+  assert(answer == "connect failed", "ok() is where a refused connection shows");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_dead_session_is_quiet();
+  output_is_bytes();
+}
+
+// That prints:
+//
+//     session: connect failed
+//
+// ## A dead session is quiet
+//
+// `connect` always hands back a `Session`.  When it failed, every method still works and
+// answers its own "nothing": `login` and `open_shell` false, `recv` an empty text, and `send`,
+// `resize` and `close` do nothing.  So a program that skips `ok()` runs its whole ladder on a
+// dead session and never reports a problem — check `ok()` right after `connect`, and
+// `is_open()` on every pass of the loop, since the remote can close a session that connected
+// fine.
+
+fn a_dead_session_is_quiet() {
+  s = ssh::connect("127.0.0.1", 1);
+  assert(!s.ok() && !s.login("me", "secret") && !s.is_open(), "false, all the way down");
+  assert(s.recv().size() == 0, "an empty stream, not an error");
+  s.send("ls\n");
+  s.close();
+  println("dead    : every call answers, none reports");
+}
+
+// ## Output is bytes
+//
+// A terminal sends UTF-8, escape sequences and raw control bytes mixed together, so `recv`
+// hands them back as bytes: loop to `size()` (the byte count) and read each with `byte_at`.
+// `len()` counts CHARACTERS and stops short on the first non-ASCII character.  Past the end
+// `byte_at` answers -1, which a 0 byte in the stream can never be confused with.
+
+fn output_is_bytes() {
+  out = "aé";           // as a shell would send it: three bytes, two characters
+  bytes: vector<integer> = [];
+  for i in 0..out.size() { bytes += [ssh::byte_at(i, out)]; }
+  assert("{bytes}" == "[97,195,169]", "a, then é as two UTF-8 bytes");
+  assert(out.len() == 2 && ssh::byte_at(3, out) == -1, "len counts 2; past the end is -1");
+  println("bytes   : {bytes}");
+}
+
+// ## Where to go next
+//
+// - `tests/worked-examples.loft` — `@SSH-001` and `@SSH-002`, the two points above in full.
+// - `tests-network/login_reject.loft` — a wrong password refused by a real `sshd`.
+// - The README's Security section: the password is never stored, and the server's host key
+//   is not checked against a known-hosts list.
