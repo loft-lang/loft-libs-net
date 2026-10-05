@@ -1,8 +1,8 @@
 [package]
 name = "game_protocol"
-version = "0.1.5"
+version = "0.1.6"
 description = "The message types a multiplayer game's client and server share — envelopes, kinds and constructors; pure loft, transport-agnostic"
-loft = ">=0.8"
+loft = ">=2026.6.0"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 repository = "loft-libs-net"
