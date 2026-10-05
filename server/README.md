@@ -49,7 +49,7 @@ if !srv.bound() { panic("no free port"); }
 ```
 
 ```loft
-use server;
+use server::*;
 
 fn main() {
   srv = server::listen(8080);
@@ -134,7 +134,7 @@ After a connection is accepted, `ws_upgrade()` upgrades it to a `WebSocket`
 the next message and returns `null` when the peer closes.
 
 ```loft
-use server;
+use server::*;
 
 fn main() {
   srv = server::listen(8080);
@@ -164,7 +164,7 @@ and calls your handler for each event. The handler closure captures your
 server state, so mutations are visible across every call.
 
 ```loft
-use server;
+use server::*;
 
 fn main() {
   srv = server::listen(8080);

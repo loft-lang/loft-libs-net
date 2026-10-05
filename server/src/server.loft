@@ -39,10 +39,8 @@
 // `"body {{ color: red }}"` is the string above.  This bites `respond_css` and
 // `respond_js` hardest, because those bodies are mostly braces.
 //
-// ⚠ `for req in srv` DOES NOT COMPILE, though this header used to advertise it.
-// The loop wants `fn next(self: T) -> Item?` and `next` here is declared
-// `-> Request`, which aborts the compiler rather than refusing (loft#1310).  Use
-// the `while` above until that is fixed.
+// `for req in srv { … }` is the same loop: `next` is an `operator next`, the one
+// `for` calls, and the walk ends when it answers null.
 
 // --- Types (must come before all functions) ---
 
@@ -256,10 +254,10 @@ pub fn next_nonblocking(self: Server) -> Request? {
 // BLOCK until a client connects, and answer its request.  The heart of stack 1:
 // call it in a loop, respond exactly once, and the connection closes.
 //
-// ⚠ Declared `-> Request` rather than `-> Request?`, which is why `for req in
-// srv` does not compile (loft#1310).  `next_nonblocking` is the variant that
-// answers null immediately when nobody is waiting.
-pub fn next(self: Server) -> Request? {
+// Null when the listener can no longer accept, which ends a `for req in srv`.
+// `next_nonblocking` is the variant that answers null immediately when nobody is
+// waiting.
+pub operator next(self: Server) -> Request? {
   if !tcp_accept(self.handle) { return null; }
   Request {
     method: tcp_method(),
@@ -484,7 +482,7 @@ pub fn ws_upgrade() -> WebSocket? {
 // which is what lets a `while` over it end cleanly.
 //
 // Ask `last_opcode()` afterwards to tell a text frame from a binary one.
-pub fn next(self: WebSocket) -> text? {
+pub operator next(self: WebSocket) -> text? {
   if !ws_recv_native(self.ws_id) { return null; }
   ws_message_native()
 }
