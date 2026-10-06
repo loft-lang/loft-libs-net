@@ -6,9 +6,9 @@
 
 // The result of an HTTP request.
 pub struct HttpResponse {
-  status: integer,
-  body: text,
-  headers: vector<text>
+  pub status: integer,
+  pub body: text,
+  pub headers: vector<text>
 }
 
 // Returns true when the status code is in the 200-299 range.
@@ -172,7 +172,7 @@ pub fn http_size(url: text) -> integer {
 // An open WebSocket session, from `ws_handler`.  It is a slot number on the
 // native side; the connection behind it reconnects on its own.
 pub struct WsHandler {
-  id: integer            // Rust-side connection slot
+  pub id: integer            // Rust-side connection slot
 }
 
 // --- Internal natives (lifecycle primitives) ---
@@ -371,8 +371,8 @@ pub fn byte_at(idx: integer, t: text) -> integer;
 // What one `poll` found: the handler slot that had a message and the
 // message, or `handle == -1` and "" when none had.
 pub struct WsGroupEvent {
-  handle: integer,
-  message: text
+  pub handle: integer,
+  pub message: text
 }
 
 // A set of handlers to receive from in one scan; see above.

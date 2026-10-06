@@ -1,6 +1,6 @@
 [package]
 name = "game_protocol"
-version = "0.1.6"
+version = "0.1.7"
 description = "The message types a multiplayer game's client and server share — envelopes, kinds and constructors; pure loft, transport-agnostic"
 loft = ">=2026.6.0"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for

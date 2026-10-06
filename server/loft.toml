@@ -1,6 +1,6 @@
 [package]
 name = "server"
-version = "0.7.3"
+version = "0.7.4"
 description = "HTTP + WebSocket server for loft — TCP sockets + tungstenite via cdylib."
 loft = ">=2026.10.20261002"
 api_compatible_with  = "0.7.0"   # four returns now declare `τ?`: a DECLARED non-null binding of one stops compiling
