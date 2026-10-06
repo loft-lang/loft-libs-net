@@ -47,22 +47,22 @@
 // A listening server, as a native socket handle.  `listen` opens one (`listen_on`,
 // `listen_tls` and the `try_` forms too), and `next` waits for its next request.
 pub struct Server {
-  handle: integer
+  pub handle: integer
 }
 
 // An upgraded WebSocket connection, as a native handle.  `ws_upgrade` makes one from the
 // current request; `next` reads a message and `send` writes one.
 pub struct WebSocket {
-  ws_id: integer
+  pub ws_id: integer
 }
 
 // One HTTP request: its method, path and body, and its headers as `Key: Value` lines.
 // `next` on a `Server` answers one, and `respond` or one of its variants answers it.
 pub struct Request {
-  method: text,
-  path: text,
-  body: text,
-  headers: vector<text>
+  pub method: text,
+  pub path: text,
+  pub body: text,
+  pub headers: vector<text>
 }
 
 // --- Internal natives ---
@@ -580,12 +580,12 @@ fn ws_idle_sleep_ms_native(ms: integer);
 // without an integer enum.  Wire format `<msg_id>:<payload>`
 // is parsed by `run` so msg_id and payload come pre-split.
 pub struct WsEvent {
-  connected: boolean,
-  message:   boolean,
-  http:      boolean,    // true for a plain HTTP request (serve a page etc.)
-  cid:       integer,    // WS client id; -1 for http events
-  msg_id:    integer,    // 0 for connected / http events
-  payload:   text,       // "" for connected / http events
+  pub connected: boolean,
+  pub message:   boolean,
+  pub http:      boolean,    // true for a plain HTTP request (serve a page etc.)
+  pub cid:       integer,    // WS client id; -1 for http events
+  pub msg_id:    integer,    // 0 for connected / http events
+  pub payload:   text,       // "" for connected / http events
   path:      text        // request path for http events; "" otherwise
 }
 
