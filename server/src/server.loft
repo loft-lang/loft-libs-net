@@ -586,7 +586,7 @@ pub struct WsEvent {
   pub cid:       integer,    // WS client id; -1 for http events
   pub msg_id:    integer,    // 0 for connected / http events
   pub payload:   text,       // "" for connected / http events
-  path:      text        // request path for http events; "" otherwise
+  pub path:  text        // request path for http events; "" otherwise
 }
 
 // Block forever, draining events and calling the handler.

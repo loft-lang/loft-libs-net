@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// A handler serves an HTTP event by its path (routing's tile server does): every field of
+// `WsEvent` is readable outside this library, `path` included.
+use server::*;
+
+fn test_an_http_event_says_its_path() {
+  e = WsEvent { connected: false, message: false, http: true, cid: -1, msg_id: 0, payload: "", path: "/tiles/3" };
+  assert(e.http && e.path == "/tiles/3", "an http event carries its path, got {e.path}");
+}
