@@ -1,7 +1,7 @@
 [package]
 name = "web"
-version = "0.4.5"
-description = "HTTP client + WebSocket client for loft — ureq + tungstenite via cdylib."
+version = "0.5.0"
+description = "HTTP client + WebSocket client for loft — the natives live in loft's own binary, so the package builds no crate."
 loft = ">=2026.10.0"
 api_compatible_with = "0.4.0"   # ws_handler now declares `WsHandler?`: a DECLARED non-null binding of it stops compiling
 data_compatible_with = "0.3.0"
@@ -9,14 +9,11 @@ repository = "loft-libs-net"
 
 [library]
 entry = "src/web.loft"
-native = "loft_web"
 
+# The natives (HTTP, the WebSocket client, the pack builder) are loft's own: the interpreter's in
+# its binary, a compiled program's in its runtime.  Each `#native` is named as it is declared.
 [native]
-crate = "loft-web"
-
-# Plan-74: native symbols are declared by co-located `#native "n_*"`
-# annotations in `src/web.loft` (scanned by `loft-ffi-build`), so the
-# register list lives in exactly one place — no `[native.functions]` table.
+in_binary = true
 
 [wasm.bridge]
 crate = "web-wasm"
