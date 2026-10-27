@@ -34,8 +34,8 @@ bytes with `byte_at(i, response.body)` (index first). `headers` are the response
   for partial reads of a large remote file
 - `response.ok()` — true for a 2xx status
 
-Natively it is the `loft_web` cdylib (ureq); in the browser the same calls go through
-`fetch()`.
+The calls are loft's own natives: a native program and a compiled one use loft's HTTP client
+(TLS against the machine's trust store), a page `loft --html` builds uses `fetch()`.
 
 ### WebSocket client
 
