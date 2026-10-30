@@ -6,9 +6,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # server — HTTP + WebSocket server for loft
 
 A small server library: accept TCP connections, answer HTTP requests, and
-run WebSocket connections. The public API lives in `src/server.loft`; a thin
-native layer (`cdylib loft_server`) wraps the OS sockets and the `tungstenite`
-WebSocket handshake/framing.
+run WebSocket connections. The public API lives in `src/server.loft`; the
+natives (the sockets, the WebSocket handshake and framing, TLS) are loft's own,
+its `net` component, so the package builds no crate.
 
 ## Install
 

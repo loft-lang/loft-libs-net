@@ -2,7 +2,7 @@
 name = "web"
 version = "0.5.0"
 description = "HTTP client + WebSocket client for loft — the natives are loft's `net` component, so the package builds no crate."
-loft = ">=2026.10.0"
+loft = ">=2026.10.20261029"   # the daily that carries the `net` component's web natives
 api_compatible_with = "0.4.0"   # ws_handler now declares `WsHandler?`: a DECLARED non-null binding of it stops compiling
 data_compatible_with = "0.3.0"
 repository = "loft-libs-net"

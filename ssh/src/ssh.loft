@@ -26,7 +26,7 @@ pub struct Session {
   handle: integer
 }
 
-// --- internal native surface (implemented in native/src/lib.rs) ---
+// --- internal native surface (loft's `net` component: src/c/loft_ssh.h) ---
 
 fn ssh_connect(host: text, port: integer) -> integer;
 #native
