@@ -42,7 +42,10 @@ fn on_the_wire() {
   wire = "{out:j}";
   assert(wire == "{{\"sender\":\"player1\",\"recipient\":\"\",\"sequence\":0,\"timestamp\":0,\"message\":{{\"msg_type\":{{\"PlayerInput\":{{}}}},\"payload\":\"move:left\"}}}}",
          "the envelope as JSON text");
-  got = GameEnvelope.parse(wire);
+  // `as GameEnvelope?`: a text that leaves the message's type out answers null rather than
+  // an envelope with a type nobody sent.
+  got = wire as GameEnvelope?;
+  assert(got != null, "the text carries every field");
   assert(got.sender == "player1" && got.message.payload == "move:left", "read back");
   assert(got.message.msg_type == MsgType.PlayerInput, "and its type with it");
   println("wire    : {len(wire)} bytes of JSON, read back as a PlayerInput");
