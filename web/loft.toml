@@ -1,7 +1,7 @@
 [package]
 name = "web"
 version = "0.5.0"
-description = "HTTP client + WebSocket client for loft — the natives live in loft's own binary, so the package builds no crate."
+description = "HTTP client + WebSocket client for loft — the natives are loft's `net` component, so the package builds no crate."
 loft = ">=2026.10.0"
 api_compatible_with = "0.4.0"   # ws_handler now declares `WsHandler?`: a DECLARED non-null binding of it stops compiling
 data_compatible_with = "0.3.0"
@@ -10,7 +10,9 @@ repository = "loft-libs-net"
 [library]
 entry = "src/web.loft"
 
-# The natives (HTTP, the WebSocket client, the pack builder) are loft's own: the interpreter's in
-# its binary, a compiled program's in its runtime.  Each `#native` is named as it is declared.
+# The natives (HTTP, the WebSocket client, the pack builder) are loft's `net` component — C over
+# the C runtime's own HTTP client, WebSocket code and TLS, built beside loft (`make components`)
+# and called through the loft-ffi ABI by the interpreter and by every compiled program alike.
+# Each `#native` is named as it is declared.
 [native]
-in_binary = true
+component = "net"
