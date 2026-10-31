@@ -45,6 +45,28 @@ fn test_header_folds_case_and_keeps_colons() {
   assert(absent.len() == 0, "an absent header answers an empty text, never null");
 }
 
+// `header` matches a whole key, never a prefix of one: "Host" is not "Hostname".  A line
+// shorter than the name, an empty line, an empty value and a space before the ':' each
+// answer "" rather than a neighbour's value, and the first of two equal keys wins.
+fn test_header_matches_the_whole_key() {
+  req = server::Request {
+    method: "GET",
+    path: "/",
+    body: "",
+    headers: ["Hostname: long", "", "X", "Odd : spaced", "X-Empty:", "Host: right",
+              "HOST: second", "user-agent: Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101"]
+  };
+  host = req.header("HOST");
+  assert(host == "right", "the first line whose key IS the name: {host}");
+  long = req.header("hostname");
+  assert(long == "long", "the longer key is its own header: {long}");
+  assert(req.header("Hos").len() == 0, "a prefix of a key is not that key");
+  assert(req.header("X-Empty").len() == 0, "an empty value answers an empty text");
+  assert(req.header("Odd").len() == 0, "a space before the ':' is not a match (the old rule too)");
+  ua = req.header("User-Agent");
+  assert(ua == "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101", "a long value whole: {ua}");
+}
+
 // @SRV-003 — the return value says WHO ANSWERED.  `serve_range` is the one helper here
 // that may decline: it answers false when the request carried no `Range` header, and
 // false means "I sent nothing — the full body is yours to serve".  Ignore that and the

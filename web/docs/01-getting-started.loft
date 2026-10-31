@@ -149,8 +149,8 @@ fn reading_one_byte_back() {
 
 // ## Where to go next
 //
-// - `README.md` — the whole surface, including the byte-range client and the
-//   browser (`[wasm.bridge]`) routing.
+// - `README.md` — the whole surface, including the byte-range client and what
+//   a browser page does differently.
 // - `tests/worked-examples.loft` — `@WEB-001` … `@WEB-003`, the three contracts
 //   above as running tests, and the calls the doc comments cite.
 // - `tests-network/http.loft` — the live HTTP examples, run by hand.

@@ -10,10 +10,12 @@ for example attaching `tmux` from a terminal app. Password authentication only;
 the password is used for the handshake and never stored.
 
 **Native-only.** SSH needs real TCP sockets, so this library ships the
-interpreter and `--native` targets and deliberately does **not** ship the
-browser (`--html`) target — a browser cannot open a raw socket. The native
-crate wraps [`russh`](https://crates.io/crates/russh) on a tokio runtime behind
-a synchronous, polling FFI, so no async leaks into loft.
+interpreter and compiled targets and deliberately does **not** ship the
+browser (`--html`) target — a browser cannot open a raw socket. The natives are
+loft's own, its `net` component: an SSH client in C over loft's sockets and its
+vendored BearSSL (curve25519 key exchange, Ed25519 / ECDSA / RSA host keys,
+AES-GCM or AES-CTR with HMAC-SHA2), polled from loft, so no async leaks in and
+the package builds no crate.
 
 ## Example
 
@@ -59,10 +61,10 @@ A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 ## Security
 
 - **Password auth only** — no private key is read or stored.
-- **The server host key is accepted unconditionally** — there is no known-hosts
-  check (`native/src/session.rs::check_server_key` answers true).  The transport is
-  encrypted, but nothing tells you the host is the one you meant, so use it on
-  networks you trust.
+- **The server's host key is not checked against a known-hosts store** — its
+  signature over the key exchange is always verified, but any key the server
+  holds is accepted.  The transport is encrypted, yet nothing tells you the host
+  is the one you meant, so use it on networks you trust.
 
 ## Testing
 
@@ -70,9 +72,7 @@ A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
   the library loads on the interpreter and `--native`. Runs in the normal gate.
 - `tests-network/login_reject.loft` — against a local `sshd`, a bad password must
   be rejected (needs `sshd` on `127.0.0.1:22`).
-- `native/src/session.rs` — a Rust unit test (`inbound_is_ordered_and_lossless`)
-  that falsifies the load-bearing invariant if the cross-thread byte queue ever
-  loses or reorders bytes. Run with `cargo test` in `native/`.
-
-The full success path (interactive shell over a real login) is a manual check —
-run the example against a host you can log into.
+- loft's own `tests/ssh_natives.rs` holds the natives to their promises — login,
+  pty and resize, bytes both ways through each side's flow control, the shell's
+  exit — against a small test server, on every backend; the protocol is checked
+  against OpenSSH (loft's C_BACKEND.md § The SSH client).

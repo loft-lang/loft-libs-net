@@ -1,18 +1,20 @@
 [package]
 name = "server"
-version = "0.7.5"
-description = "HTTP + WebSocket server for loft — TCP sockets + tungstenite via cdylib."
-loft = ">=2026.10.20261002"
+version = "0.7.6"
+description = "HTTP + WebSocket server for loft — the natives are loft's `net` component, so the package builds no crate."
+loft = ">=2026.10.20261029"   # the daily that carries the `net` component's server natives
 api_compatible_with  = "0.7.0"   # four returns now declare `τ?`: a DECLARED non-null binding of one stops compiling
 data_compatible_with = "0.3.1"   # oldest own release whose stored data this reads
 repository = "loft-libs-net"
 
 [library]
 entry = "src/server.loft"
-native = "loft_server"
 
+# The natives are loft's `net` component — C over the C runtime's sockets and its vendored
+# BearSSL, built beside loft (`make components`) and called through the loft-ffi ABI by the
+# interpreter and by every compiled program alike.  Each `#native` is named as it is declared.
 [native]
-crate = "loft-server"
+component = "net"
 
 [dependencies]
 web = ">=0.4"
