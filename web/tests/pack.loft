@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// Local cdylib smoke — exercises the binary-packing helpers
+// Local smoke — exercises the binary-packing helpers
 // without touching the network.  The network-dependent HTTP
 // tests live in tests-network/http.loft and are not run in CI.
 

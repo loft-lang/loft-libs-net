@@ -172,7 +172,7 @@ pub fn http_size(url: text) -> integer {
 // An open WebSocket session, from `ws_handler`.  It is a slot number on the
 // native side; the connection behind it reconnects on its own.
 pub struct WsHandler {
-  pub id: integer            // Rust-side connection slot
+  pub id: integer            // the runtime's connection slot
 }
 
 // --- Internal natives (lifecycle primitives) ---
@@ -214,16 +214,13 @@ fn ws_client_close(handle: integer);
 
 // Open a WebSocket session.  Returns null only if the URL is
 // malformed; transient connection failures (server not yet up,
-// network blip) are absorbed by the auto-reconnect loop in the Rust
-// layer, so this call always returns a usable handle for any
+// network blip) are absorbed by the runtime's auto-reconnect
+// loop, so this call always returns a usable handle for any
 // well-formed `ws://...` or `wss://...` URL.
 //
 // `wss://` (TLS) works on BOTH targets: the browser uses the platform
-// WebSocket, and the native client dials TLS through rustls with
-// certificate validation ON by default (default port 443).  For a self-signed dev endpoint,
-// set `LOFT_WS_INSECURE_SKIP_VERIFY=1` in the native process — an
-// explicit opt-out, never a URL option, so it cannot be baked into a
-// deployed config by accident.
+// WebSocket, and the native client dials TLS with certificate validation
+// ON (default port 443); there is no switch that turns the validation off.
 // Example: @WEB-003 — a handle is not a connection; ask the traffic, not the handle.
 //
 // ⚠ The return is `WsHandler?` because null is the one distinction this call
@@ -377,7 +374,7 @@ pub struct WsGroupEvent {
 
 // A set of handlers to receive from in one scan; see above.
 pub struct WsGroup {
-  _dummy: integer   // no state on loft side; Rust owns the list
+  _dummy: integer   // no state on loft side; the runtime owns the list
 }
 
 fn ws_group_clear();

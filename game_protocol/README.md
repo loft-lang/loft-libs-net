@@ -13,7 +13,7 @@ the common ones.  Pure loft.
 
 It does not move bytes.  The transport — `web`'s WebSocket, `server`'s loop, anything that
 carries text — is the program's own; an envelope goes on the wire as JSON with `"{env:j}"`
-and comes back with `GameEnvelope.parse(text)`.  The package declares `web` and `server`
+and comes back with `text as GameEnvelope?` (null when the text leaves a field out).  The package declares `web` and `server`
 because its `examples/` — a tic-tac-toe client and server, and the v5 session demos — run
 over them; the message types themselves use neither.
 

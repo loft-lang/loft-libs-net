@@ -158,7 +158,7 @@ buffer), `last_opcode() -> integer` (1 = text, 2 = binary, 8 = close, after a
 
 ## WebSocket — many clients
 
-For a multiplayer server, register one event handler with `run`. Rust drives
+For a multiplayer server, register one event handler with `run`. The runtime drives
 the accept loop, per-client polling, frame parsing, and disconnect detection,
 and calls your handler for each event. The handler closure captures your
 server state, so mutations are visible across every call.
