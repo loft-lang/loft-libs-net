@@ -33,7 +33,7 @@ fn main() {
 // ## On the wire
 //
 // Format an envelope with `:j` and it is JSON text, ready for any transport; on the other side,
-// `GameEnvelope.parse(text)` reads it back into the same structure.  The payload is text too —
+// `text as GameEnvelope?` reads it back into the same structure.  The payload is text too —
 // a game decides what goes in it (a move, a serialized state, a line of chat).
 
 fn on_the_wire() {

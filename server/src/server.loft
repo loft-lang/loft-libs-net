@@ -8,7 +8,7 @@
 //      time: `next` blocks until a client arrives and `respond` closes it.
 //   2. Multi-client WebSocket: `srv.run(on_event)`.
 //      The clean event-driven surface used by multiplayer servers.
-//      Loft programs register ONE handler `fn(WsEvent)` and Rust
+//      Loft programs register ONE handler `fn(WsEvent)` and the runtime
 //      drives the accept loop, per-client polling, and disconnect
 //      detection.  Disconnects are silently absorbed — the loft
 //      program is not notified.  See the `run` doc block below.
@@ -562,7 +562,7 @@ fn ws_idle_sleep_ms_native(ms: integer);
 // --- Multi-client WebSocket API (clean) ---
 //
 // The public surface for multi-client servers.  Loft programs
-// register a single event handler via `run` and Rust drives the
+// register a single event handler via `run` and the runtime drives the
 // rest: accept, per-client polling, frame parsing, disconnect
 // detection.
 //
@@ -616,7 +616,7 @@ pub fn run(self: Server, on_event: fn(WsEvent)) {
 // Non-blocking single-event drain — returns the next WsEvent, or null
 // when nothing is pending.  Lets a server that also needs a periodic
 // tick (timers, decay, snapshots) run its OWN loop while still using the
-// efficient Rust-side event pump: drain `poll_event` in a batch, do the
+// efficient runtime-side event pump: drain `poll_event` in a batch, do the
 // periodic work, idle-sleep when a pass produced nothing.  `run` above is
 // the convenience wrapper for servers that only react to events.
 //
@@ -678,7 +678,7 @@ pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean {
 }
 
 // Send a frame to every active client.  Returns the count of
-// successful sends.  Iteration happens entirely in Rust.
+// successful sends.  Iteration happens entirely in the runtime.
 pub fn broadcast(self: Server, msg: text) -> integer {
   ws_broadcast_native(self.handle, msg)
 }
