@@ -1,6 +1,6 @@
 [package]
 name = "game_protocol"
-version = "0.1.7"
+version = "0.1.8"
 description = "The message types a multiplayer game's client and server share — envelopes, kinds and constructors; pure loft, transport-agnostic"
 loft = ">=2026.6.0"
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
@@ -11,5 +11,5 @@ repository = "loft-libs-net"
 entry = "src/game_protocol.loft"
 
 [dependencies]
-server = ">=0.1"
-web    = ">=0.1"
+server = ">=0.7.6"
+web    = ">=0.5.0"
