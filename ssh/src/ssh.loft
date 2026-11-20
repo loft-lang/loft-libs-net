@@ -6,8 +6,9 @@
 // password is used for the handshake and never stored.  Native-only: SSH needs
 // real TCP sockets, so this library does not ship the browser (`--html`) target.
 //
-// Typical use:
-//   s = ssh::connect(host, 42022);
+// Typical use — name the key the server must hold, so the password goes to that server and
+// to no other (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host prints it):
+//   s = ssh::connect_pinned(host, 42022, "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8");
 //   if s.ok() && s.login(user, password) && s.open_shell("xterm-256color", 80, 24) {
 //     s.send("tmux attach\n");
 //     while s.is_open() {
@@ -29,6 +30,9 @@ pub struct Session {
 // --- internal native surface (loft's `net` component: src/c/loft_ssh.h) ---
 
 fn ssh_connect(host: text, port: integer) -> integer;
+#native
+
+fn ssh_host_key(handle: integer) -> text;
 #native
 
 fn ssh_login(handle: integer, user: text, password: text) -> boolean;
@@ -62,11 +66,35 @@ pub fn byte_at(idx: integer, data: text) -> integer;
 // --- public API ---
 
 // Open a TCP connection to `host:port` and run the SSH transport handshake.
-// Check `ok()` before authenticating.
+// Check `ok()` before authenticating.  The handshake proves the server holds SOME key, not
+// that it is the host you meant: compare `host_key()` before `login`, or use
+// `connect_pinned`, on any network you do not control end to end.
 // Example: @SSH-001 — a failed session stays callable and silent, so `ok()` is the
 // only thing that reports it.
 pub fn connect(host: text, port: integer) -> Session {
   Session { handle: ssh_connect(host, port) }
+}
+
+// Connect, and keep the session only when the server holds the key named `key` — the
+// `SHA256:…` name `ssh-keygen -l` and OpenSSH's first-connect prompt print.  Any other key
+// closes the connection before a password can be sent: the answer is a failed session
+// (`ok()` is false), the same as a host that did not answer.
+pub fn connect_pinned(host: text, port: integer, key: text) -> Session {
+  s = connect(host, port);
+  if s.ok() && s.host_key() != key {
+    s.close();
+    return Session { handle: -1 };
+  }
+  s
+}
+
+// The key the server proved it holds in the handshake, named as OpenSSH names one:
+// `SHA256:` and the unpadded base64 of the key's SHA-256.  Known as soon as `connect`
+// answers and before `login` sends anything; "" for a session that did not connect.
+// Record it the first time you connect to a host and compare it every time after.
+pub fn host_key(self: Session) -> text {
+  if self.handle < 0 { return ""; }
+  ssh_host_key(self.handle)
 }
 
 // True when the session connected and completed the transport handshake.
