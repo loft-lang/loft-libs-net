@@ -646,7 +646,9 @@ pub fn poll_event(self: Server) -> WsEvent? {
                            payload: raw[i + 1..], path: "" };
         }
       }
-      log_warn("server: dropped malformed frame from {cid}: {raw}");
+      // The frame's size and not its text: what a peer sent is the peer's to choose, and
+      // up to 16 MiB of it, control characters and all, does not belong in a log line.
+      log_warn("server: dropped malformed frame from {cid} ({raw.size()} bytes)");
     }
     // kind == 2 (Disconnected) absorbed silently; keep draining.
   }
