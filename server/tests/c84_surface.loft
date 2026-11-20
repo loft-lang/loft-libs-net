@@ -29,6 +29,10 @@ fn primitive(name: text) -> boolean {
     "serve_range", "serve_data",
     "ws_upgrade", "send", "send_binary", "last_opcode",
     "run", "poll_event", "send_to", "broadcast", "disconnect",
+    // Which origins' pages may open a WebSocket: answered in the handshake, before a client
+    // exists and before any handler runs, so nothing above `server` can do it.  What a
+    // client may DO once connected stays above.
+    "allow_origins",
   ];
   for p in set {
     if p == name { return true; }

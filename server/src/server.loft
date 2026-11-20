@@ -544,6 +544,9 @@ fn ws_client_active_native(id: integer) -> boolean;
 fn ws_next_event_native(handle: integer) -> boolean;
 #native "n_ws_next_event"
 
+fn ws_allow_origins_native(handle: integer, origins: text);
+#native "n_ws_allow_origins"
+
 fn ws_event_kind_native() -> integer;
 #native "n_ws_event_kind"
 
@@ -594,7 +597,40 @@ pub struct WsEvent {
   pub cid:       integer,    // WS client id; -1 for http events
   pub msg_id:    integer,    // 0 for connected / http events
   pub payload:   text,       // "" for connected / http events
-  pub path:  text        // request path for http events; "" otherwise
+  pub path:  text,       // request path for http events; "" otherwise
+  pub headers: text      // a connected event's upgrade request headers, one `Key: Value`
+                         // per line; "" otherwise.  Read one with `header(name)`.
+}
+
+// One header of the request that opened this connection ("" when it sent none by that
+// name, and for an event that is not `connected`).  This is where a server learns what a
+// client said about itself before any message: its `Origin`, a `Cookie`, a token.
+pub fn header(self: WsEvent, name: text) -> text {
+  want = name.to_lowercase();
+  wl = want.size();
+  for h in self.headers.split('\n') {
+    if h.byte_at(wl) == ':' as integer && key_matches(h, want) {
+      return h[wl + 1..].trim();
+    }
+  }
+  ""
+}
+
+// Name the origins whose pages may open a WebSocket on this server, e.g.
+// `srv.allow_origins(["https://game.example"])`.  A browser states the page's origin on
+// every WebSocket it opens, and it lets ANY page open one to any address it can reach —
+// including a server on the visitor's own machine.  With a list, a page of another origin
+// is answered 403 and never becomes a client; a client that states no origin (anything
+// that is not a browser) connects as before.  An empty list allows every origin, which is
+// the default.  For a rule a list cannot say, read `event.header("Origin")` on the
+// connected event and close the client yourself.
+pub fn allow_origins(self: Server, origins: vector<text>) {
+  list = "";
+  for o in origins {
+    if list != "" { list += "\n"; }
+    list += o;
+  }
+  ws_allow_origins_native(self.handle, list);
 }
 
 // Block forever, draining events and calling the handler.
@@ -628,11 +664,13 @@ pub fn poll_event(self: Server) -> WsEvent? {
     cid  = ws_event_client_id_native();
     if kind == 0 {
       return WsEvent { connected: true, message: false, http: false,
-                       cid: cid, msg_id: 0, payload: "", path: "" };
+                       cid: cid, msg_id: 0, payload: "", path: "",
+                       headers: ws_event_payload_native() };
     } else if kind == 3 {
       // HTTP request — payload carries the path; reply via respond_*.
       return WsEvent { connected: false, message: false, http: true,
-                       cid: cid, msg_id: 0, payload: "", path: ws_event_payload_native() };
+                       cid: cid, msg_id: 0, payload: "", path: ws_event_payload_native(),
+                       headers: "" };
     } else if kind == 1 {
       raw = ws_event_payload_native();
       i   = raw.find(":");
@@ -643,7 +681,7 @@ pub fn poll_event(self: Server) -> WsEvent? {
         if mid != null {
           return WsEvent { connected: false, message: true, http: false,
                            cid: cid, msg_id: mid ?? 0,
-                           payload: raw[i + 1..], path: "" };
+                           payload: raw[i + 1..], path: "", headers: "" };
         }
       }
       // The frame's size and not its text: what a peer sent is the peer's to choose, and

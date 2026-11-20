@@ -185,6 +185,13 @@ A `WsEvent` carries `connected` / `message` / `http` (mutually-exclusive
 booleans), `cid` (the client id; `-1` for `http`), `msg_id` + `payload` (the
 split message; empty for non-message events), and `path` (for `http` events).
 
+- `srv.allow_origins(origins)` — name the origins whose pages may open a WebSocket here,
+  e.g. `["https://game.example"]`.  A browser lets any page open a WebSocket to any
+  address it can reach, a server on the visitor's own machine included, and states the
+  page's origin when it does: with a list, another origin is answered 403.  A client that
+  states none (not a browser) connects as before, and an empty list allows every origin.
+- `ev.header(name) -> text` — on a `connected` event, a header of the request that opened
+  the connection (`Origin`, `Cookie`, a token).
 - `srv.send_to(cid, msg) -> boolean` — send to one client.
 - `srv.broadcast(msg) -> integer` — send to all; returns the count sent.
 - `srv.disconnect(cid)` — force-close one client.
