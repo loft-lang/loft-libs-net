@@ -1,6 +1,6 @@
 [package]
 name = "ssh"
-version = "0.1.5"
+version = "0.1.6"
 description = "SSH client for loft — drive an interactive remote shell (e.g. attach tmux) over password auth, never stored. Native-only."
 loft = ">=2026.10.20261030"   # the daily that carries the `net` component's ssh natives
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for

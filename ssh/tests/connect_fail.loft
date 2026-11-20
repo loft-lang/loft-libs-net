@@ -13,5 +13,11 @@ fn main() {
   assert(!s.login("u", "p"));
   assert(!s.is_open());
   s.close();
+  // A session that did not connect names no key, and a pinned connect to nothing is a failed
+  // session like any other.
+  assert(s.host_key() == "", "a failed session names no host key");
+  p = ssh::connect_pinned("127.0.0.1", 1, "SHA256:0000000000000000000000000000000000000000000");
+  assert(!p.ok() && p.host_key() == "" && !p.login("u", "p"), "a pinned connect to a closed port fails");
+  p.close();
   println("ssh connect_fail: PASS");
 }
