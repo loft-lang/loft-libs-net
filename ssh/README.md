@@ -48,6 +48,8 @@ A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 | Function | Purpose |
 |---|---|
 | `connect(host, port) -> Session` | TCP connect + SSH transport handshake |
+| `connect_pinned(host, port, key) -> Session` | the same, kept only when the server holds the key named `key` |
+| `session.host_key() -> text` | the server's key as OpenSSH names it (`SHA256:…`), known before `login` |
 | `session.ok() -> boolean` | did the connect/handshake succeed |
 | `session.login(user, password) -> boolean` | password authentication |
 | `session.open_shell(term, cols, rows) -> boolean` | request a PTY + start the shell |
@@ -61,10 +63,14 @@ A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 ## Security
 
 - **Password auth only** — no private key is read or stored.
-- **The server's host key is not checked against a known-hosts store** — its
-  signature over the key exchange is always verified, but any key the server
-  holds is accepted.  The transport is encrypted, yet nothing tells you the host
-  is the one you meant, so use it on networks you trust.
+- **Name the host's key.**  The handshake proves the server holds a key, not that
+  it is the host you meant.  `connect_pinned(host, port, key)` keeps the session
+  only for the key you name, and closes any other before a password can be sent;
+  `session.host_key()` reports the key for a program that keeps its own list
+  (record it on first connect, compare it after).  The name is the one
+  `ssh-keygen -l` prints.  Plain `connect` accepts whatever key the server holds:
+  use it only where nobody can sit between you and the host.
+- A key that changes during a session ends the session.
 
 ## Testing
 
