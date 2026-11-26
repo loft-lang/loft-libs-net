@@ -1,0 +1,79 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --log-conf .loft/log.conf
+//
+// A message frame that is not `<id>:<payload>` is dropped by `poll_event` with one warning,
+// and that warning names the frame by its size, never by its text: what a peer sends is the
+// peer's to choose, and it does not belong in the server's log.
+//
+// The server and a `web` client run in two `par` workers, because the client's connect waits
+// for the upgrade answer that only a polling server gives.  The log is the run's default one
+// (`.loft/log.txt` beside this file, on both backends; the `@ARGS` names the default config
+// path, which turns the interpreter's test logger on and holds no file), and only what this
+// test appended to it is read.
+//
+// @falsified-at: ee2474a — by hand: the warning put back to interpolate `{raw}` instead of
+//   `({raw.size()} bytes)` → "the report gives its size" failed on the interpreter and on
+//   --native, the log line carrying the frame's text; restored, both pass.
+use server::*;
+use web::*;
+
+LOG = ".loft/log.txt";
+PORT = 18094;
+// A frame with no `<id>:` prefix, and text nothing else in a log line would contain.
+DROPPED = "no id prefix, only words-that-stay-out-of-the-log";
+
+// The server: polls until the well-formed frame the client sends after the dropped one
+// arrives, and answers its payload ("" when none came).
+fn serve() -> text {
+  srv = server::listen(PORT);
+  got = "";
+  for _ in 0..2500 {
+    ev = srv.poll_event();
+    if ev != null && ev.message {
+      got = ev.payload;
+      break;
+    }
+    if ev == null { web::sleep_ms(2); }
+  }
+  srv.close();
+  got
+}
+
+// The client: the malformed frame first, then one the server delivers.
+fn talk() -> text {
+  web::sleep_ms(50);
+  h = web::ws_handler("ws://127.0.0.1:{PORT}/") ?? return "no handle";
+  sent = false;
+  for _ in 0..300 {
+    if h.send(DROPPED) {
+      sent = true;
+      break;
+    }
+    web::sleep_ms(10);
+  }
+  if sent { sent = h.send("7:delivered"); }
+  web::sleep_ms(200);
+  h.close();
+  if sent { "sent" } else { "not sent" }
+}
+
+fn act(role: integer) -> text {
+  if role == 0 { serve() } else { talk() }
+}
+
+fn test_a_dropped_frame_is_logged_by_its_size() {
+  before = len(file(LOG).content() ?? "");
+  answers = "";
+  for role in [0, 1] par(a = act(role), 2) {
+    answers += "[{a}]";
+  }
+  // The well-formed frame arrived, so the dropped one before it was read and judged.
+  assert(answers == "[delivered][sent]", "both sides ran: {answers}");
+  logged = (file(LOG).content() ?? "")[before..];
+  assert(logged.contains("dropped malformed frame"), "the dropped frame is reported: {logged}");
+  assert(logged.contains("({len(DROPPED)} bytes)"), "the report gives its size: {logged}");
+  assert(!logged.contains("words-that-stay-out-of-the-log"),
+         "the frame's text stayed out of the log: {logged}");
+}
